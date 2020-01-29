@@ -96,10 +96,13 @@ def fetch_id_bboxes(args):
         if (geomid != currID):
             if (currID != -1):
                 id_list.append([currID, bbox_list])
+                bbox_list = []
+            bbox_list.append([geomts, bbox])
             currID = geomid
         elif (geom == gt[-1]):
             bbox_list.append([geomts, bbox])
             id_list.append([currID, bbox_list])
+            bbox_list = []
         else:
             bbox_list.append([geomts, bbox])
 
