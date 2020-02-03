@@ -3,7 +3,7 @@
 import argparse
 import os
 import yaml
-import numpy
+import numpy as np
 import cv2
 
 parser = argparse.ArgumentParser()
@@ -15,6 +15,48 @@ parser.add_argument("--min_length", default=16, help="Minimum length of a valid 
 parser.add_argument("--max_length", default=200, help="Maximum length of a valid test sequence")
 parser.add_argument("--fetch_gt", help="Fetch sequence annotations and dump to YAML")
 parser.add_argument("--fetch_frames", help="Fetch sequence frames")
+parser.add_argument("--scale_frames", type=eval, help="Resize sequence frames to dimension (h,w)")
+
+label_dict = {"BG": 0,  # background
+    "activity_walking": 1,
+    "activity_standing": 2,
+    "activity_carrying": 3,
+    "activity_gesturing": 4,
+    "Closing": 5,
+    "Opening": 6,
+    "Interacts": 7,
+    "Exiting": 8,
+    "Entering": 9,
+    "Talking": 10,
+    "Transport_HeavyCarry": 11,
+    "Unloading": 12,
+    "Pull": 13,
+    "Loading": 14,
+    "Open_Trunk": 15,
+    "Closing_Trunk": 16,
+    "Riding": 17,
+    "specialized_texting_phone": 18,
+    "Person_Person_Interaction": 19,
+    "specialized_talking_phone": 20,
+    "activity_running": 21,
+    "PickUp": 22,
+    "specialized_using_tool": 23,
+    "SetDown": 24,
+    "activity_crouching": 25,
+    "activity_sitting": 26,
+    "Object_Transfer": 27,
+    "Push": 28,
+    "PickUp_Person_Vehicle": 29,
+    "vehicle_turning_right": 30,
+    "vehicle_moving": 31,
+    "vehicle_stopping" : 32,
+    "vehicle_starting" :33,
+    "vehicle_turning_left": 34,
+    "vehicle_u_turn": 35,
+    "specialized_miscellaneous": 36,
+    "DropOff_Person_Vehicle" : 37,
+    "Misc" : 38,
+    "Drop" : 39}
 
 def load_yml_file_without_meta(yml_file):
     """Load the ActEV YAML annotation files."""
@@ -108,6 +150,38 @@ def fetch_id_bboxes(args):
 
     return id_list
 
+def construct_numpy_gt(gt_list, actor_list):
+    
+    numpy_gt = []
+
+    for gt in gt_list:
+        frame = gt["frame"]
+        action_list = gt["actions"]
+        frame_annotations = np.zeros((len(actor_list), 46), dtype=int) # [frame, actor_id, x1, y1, x2, y2, label0,...,label39]
+        for i in range(len(actor_list)):
+            frame_annotations[i,0] = frame
+            frame_annotations[i,1] = actor_list[i]
+        for action in action_list:
+            label = action["label"]
+            label_idx = label_dict[label] + 6
+            actors = action["actors"]
+            for actor in actors:
+                actor_id = actor["actor_id"]
+                bbox = actor["bbox"]
+                anno_row = np.where(frame_annotations[:,1] == actor_id)
+                frame_annotations[anno_row, label_idx] = 1
+                frame_annotations[anno_row, 2] = bbox[0]
+                frame_annotations[anno_row, 3] = bbox[1]
+                frame_annotations[anno_row, 4] = bbox[2]
+                frame_annotations[anno_row, 5] = bbox[3]
+                print(frame_annotations[anno_row,:])
+        if (numpy_gt != []):
+            np.append(numpy_gt, frame_annotations, axis=0)
+        else:
+            numpy_gt = frame_annotations
+    return numpy_gt
+
+
 def construct_gt(args, sequences, action_list):
     id_list = fetch_id_bboxes(args)
     # id_list = [[7, [[0, [0, 1, 2, 3]], [1,[0,2,4,6]]]], [6, [[0, [0, 1, 2, 3]], [1,[0,2,4,6]]]]]
@@ -122,10 +196,14 @@ def construct_gt(args, sequences, action_list):
             os.makedirs(gt_directory)
         gt_list = []
 
+        actor_list = []
+
         for frame in range(start,end):
             frame_actions = []
             for action in action_set:
                 actors = action[1]
+                if len(actors) > len(actor_list):
+                    actor_list = actors
                 frame_actors = []
                 for actor in actors:
                     actorbboxes = []
@@ -141,11 +219,15 @@ def construct_gt(args, sequences, action_list):
                     frame_actors.append({'actor_id':actor, 'bbox':bbox})
                 frame_actions.append({'label':action[0], 'actors':frame_actors})
             gt_list.append({'frame':frame, 'actions':frame_actions})
+        
+        # ground_truth = {'annotations':gt_list}
+        # ground_truth_file = gt_directory + '/ground_truth.yaml'
+        # with open(ground_truth_file, 'w') as file:
+        #     dump = yaml.dump(ground_truth, file)
 
-        ground_truth = {'annotations':gt_list}
-        ground_truth_file = gt_directory + '/ground_truth.yaml'
-        with open(ground_truth_file, 'w') as file:
-            dump = yaml.dump(ground_truth, file)
+        numpy_gt = construct_numpy_gt(gt_list, actor_list)
+        ground_truth_npy_file = gt_directory + '/ground_truth.npy'
+        np.save(ground_truth_npy_file, numpy_gt)
 
 def generate_frames(args, sequences):
     video_file = args.video_path + '/' + args.source_name + '.mp4'
@@ -161,10 +243,16 @@ def generate_frames(args, sequences):
             start = sequence[0]
             end = sequence[1]
             if (frameNum in range(start,end)):
-                frame_directory = args.output_path + '/' + args.source_name + '/' + "{:06d}_".format(int(start)) + "{:06d}".format(int(end)) + '/frames'
+                if (args.scale_frames):
+                    frame_directory = args.output_path + '/' + args.source_name + '/' + "{:06d}_".format(int(start)) + "{:06d}".format(int(end)) + '/scaled_frames'    
+                else:
+                    frame_directory = args.output_path + '/' + args.source_name + '/' + "{:06d}_".format(int(start)) + "{:06d}".format(int(end)) + '/frames'
                 if not os.path.exists(frame_directory):
                     os.makedirs(frame_directory)
                 image_file = frame_directory + "/{:06d}.jpg".format(int(frameNum))
+
+                if (args.scale_frames):
+                    frame = cv2.resize(frame, args.scale_frames[::-1], interpolation=cv2.INTER_LINEAR)
                 cv2.imwrite(image_file, frame)
         frameNum += 1
         ret, frame = video_cap.read()
@@ -181,10 +269,10 @@ if __name__ == "__main__":
     if (args.fetch_frames):
         generate_frames(args, sequences)
     
-    seq_array = numpy.array(sequences)
+    seq_array = np.array(sequences)
     seq_lengths = seq_array[:,1]-seq_array[:,0]
-    min_length = numpy.amin(seq_lengths)
-    max_length = numpy.amax(seq_lengths)
-    mean_length = numpy.mean(seq_lengths)
+    min_length = np.amin(seq_lengths)
+    max_length = np.amax(seq_lengths)
+    mean_length = np.mean(seq_lengths)
 
     print(min_length, max_length, mean_length)
