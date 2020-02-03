@@ -152,7 +152,7 @@ def fetch_id_bboxes(args):
 
 def construct_numpy_gt(gt_list, actor_list):
     
-    numpy_gt = []
+    numpy_gt = np.zeros((1,46), dtype=int)
 
     for gt in gt_list:
         frame = gt["frame"]
@@ -174,12 +174,9 @@ def construct_numpy_gt(gt_list, actor_list):
                 frame_annotations[anno_row, 3] = bbox[1]
                 frame_annotations[anno_row, 4] = bbox[2]
                 frame_annotations[anno_row, 5] = bbox[3]
-                print(frame_annotations[anno_row,:])
-        if (numpy_gt != []):
-            np.append(numpy_gt, frame_annotations, axis=0)
-        else:
-            numpy_gt = frame_annotations
-    return numpy_gt
+                # print(frame_annotations[anno_row,:])
+        numpy_gt = np.append(numpy_gt, frame_annotations, axis=0)
+    return numpy_gt[1:,:]
 
 
 def construct_gt(args, sequences, action_list):
