@@ -88,6 +88,13 @@ def select_sequences(args):
         actor_list = []
         for actor in actors:
             actor_list.append(actor["id1"])
+            actor_timespan_struct = actor["timespan"]
+            for actor_ts in actor_timespan_struct:
+                actor_timespan = actor_ts["tsr0"]
+                if actor_timespan[0] > timespan[0]:
+                    timespan[0] = actor_timespan[0]
+                if actor_timespan[1] < timespan[1]:
+                    timespan[1] = actor_timespan[1]
         action_list.append([actID, actor_list, timespan])
         if (timespan[1] > max_frame):
             max_frame = timespan[1]
@@ -199,10 +206,10 @@ def construct_gt(args, sequences, action_list):
             frame_actions = []
             for action in action_set:
                 actors = action[1]
-                if len(actors) > len(actor_list):
-                    actor_list = actors
                 frame_actors = []
                 for actor in actors:
+                    if not actor in actor_list:
+                        actor_list.append(actor)
                     actorbboxes = []
                     for id in id_list:
                         if id[0] == actor:
@@ -240,17 +247,18 @@ def generate_frames(args, sequences):
             start = sequence[0]
             end = sequence[1]
             if (frameNum in range(start,end)):
-                if (args.scale_frames):
-                    frame_directory = args.output_path + '/' + args.source_name + '/' + "{:06d}_".format(int(start)) + "{:06d}".format(int(end)) + '/scaled_frames'    
-                else:
-                    frame_directory = args.output_path + '/' + args.source_name + '/' + "{:06d}_".format(int(start)) + "{:06d}".format(int(end)) + '/frames'
+                frame_directory = args.output_path + '/' + args.source_name + '/' + "{:06d}_".format(int(start)) + "{:06d}".format(int(end)) + '/frames'
                 if not os.path.exists(frame_directory):
                     os.makedirs(frame_directory)
                 image_file = frame_directory + "/{:06d}.jpg".format(int(frameNum))
-
-                if (args.scale_frames):
-                    frame = cv2.resize(frame, args.scale_frames[::-1], interpolation=cv2.INTER_LINEAR)
                 cv2.imwrite(image_file, frame)
+                if (args.scale_frames):
+                    scaled_frame = cv2.resize(frame, args.scale_frames[::-1], interpolation=cv2.INTER_LINEAR)
+                    scaled_frame_directory = args.output_path + '/' + args.source_name + '/' + "{:06d}_".format(int(start)) + "{:06d}".format(int(end)) + '/scaled_frames'
+                    if not os.path.exists(scaled_frame_directory):
+                        os.makedirs(scaled_frame_directory)
+                    scaled_image_file = scaled_frame_directory + "/{:06d}.jpg".format(int(frameNum))
+                    cv2.imwrite(scaled_image_file, scaled_frame)
         frameNum += 1
         ret, frame = video_cap.read()
 
