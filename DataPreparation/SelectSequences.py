@@ -170,11 +170,17 @@ def construct_numpy_gt(gt_list, actor_list):
             frame_annotations[i,1] = actor_list[i]
         for action in action_list:
             label = action["label"]
-            label_idx = label_dict[label] + 6
+            label_idx = label_dict[label]
+            if label_idx < 0:
+                return 0, 1
+            else:
+                label_idx += 6
             actors = action["actors"]
             for actor in actors:
                 actor_id = actor["actor_id"]
                 bbox = actor["bbox"]
+                if (len(bbox) == 0):
+                    return 0, 1
                 anno_row = np.where(frame_annotations[:,1] == actor_id)
                 frame_annotations[anno_row, label_idx] = 1
                 frame_annotations[anno_row, 2] = bbox[0]
@@ -183,21 +189,18 @@ def construct_numpy_gt(gt_list, actor_list):
                 frame_annotations[anno_row, 5] = bbox[3]
                 # print(frame_annotations[anno_row,:])
         numpy_gt = np.append(numpy_gt, frame_annotations, axis=0)
-    return numpy_gt[1:,:]
+    return numpy_gt[1:,:], 0
 
 
 def construct_gt(args, sequences, action_list):
     id_list = fetch_id_bboxes(args)
     # id_list = [[7, [[0, [0, 1, 2, 3]], [1,[0,2,4,6]]]], [6, [[0, [0, 1, 2, 3]], [1,[0,2,4,6]]]]]
-
+    bad_sequences = []
     for idx in range(len(sequences)):
         sequence = sequences[idx]
         start = sequence[0]
         end = sequence[1]
         action_set = action_list[idx]
-        gt_directory = args.output_path + '/' + args.source_name + '/' + "{:06d}_".format(int(start)) + "{:06d}".format(int(end))
-        if not os.path.exists(gt_directory):
-            os.makedirs(gt_directory)
         gt_list = []
 
         actor_list = []
@@ -223,17 +226,23 @@ def construct_gt(args, sequences, action_list):
                     frame_actors.append({'actor_id':actor, 'bbox':bbox})
                 frame_actions.append({'label':action[0], 'actors':frame_actors})
             gt_list.append({'frame':frame, 'actions':frame_actions})
-        
-        # ground_truth = {'annotations':gt_list}
-        # ground_truth_file = gt_directory + '/ground_truth.yaml'
-        # with open(ground_truth_file, 'w') as file:
-        #     dump = yaml.dump(ground_truth, file)
+        numpy_gt, parse_errors = construct_numpy_gt(gt_list, actor_list)
+        if not parse_errors:
+            gt_directory = args.output_path + '/' + args.source_name + '/' + "{:06d}_".format(int(start)) + "{:06d}".format(int(end))
+            if not os.path.exists(gt_directory):
+                os.makedirs(gt_directory)
+            # ground_truth = {'annotations':gt_list}
+            # ground_truth_file = gt_directory + '/ground_truth.yaml'
+            # with open(ground_truth_file, 'w') as file:
+            #     dump = yaml.dump(ground_truth, file)
 
-        numpy_gt = construct_numpy_gt(gt_list, actor_list)
-        ground_truth_npy_file = gt_directory + '/ground_truth.npy'
-        np.save(ground_truth_npy_file, numpy_gt)
+            ground_truth_npy_file = gt_directory + '/ground_truth.npy'
+            np.save(ground_truth_npy_file, numpy_gt)
+        else:
+            bad_sequences.append(idx)
+    return bad_sequences
 
-def generate_frames(args, sequences):
+def generate_frames(args, sequences, bad_sequences):
     video_file = args.video_path + '/' + args.source_name + '.mp4'
     frameNum = 0
 
@@ -243,22 +252,24 @@ def generate_frames(args, sequences):
 
     ret, frame = video_cap.read()
     while(ret):
-        for sequence in sequences:
-            start = sequence[0]
-            end = sequence[1]
-            if (frameNum in range(start,end)):
-                frame_directory = args.output_path + '/' + args.source_name + '/' + "{:06d}_".format(int(start)) + "{:06d}".format(int(end)) + '/frames'
-                if not os.path.exists(frame_directory):
-                    os.makedirs(frame_directory)
-                image_file = frame_directory + "/{:06d}.jpg".format(int(frameNum))
-                cv2.imwrite(image_file, frame)
-                if (args.scale_frames):
-                    scaled_frame = cv2.resize(frame, args.scale_frames[::-1], interpolation=cv2.INTER_LINEAR)
-                    scaled_frame_directory = args.output_path + '/' + args.source_name + '/' + "{:06d}_".format(int(start)) + "{:06d}".format(int(end)) + '/scaled_frames'
-                    if not os.path.exists(scaled_frame_directory):
-                        os.makedirs(scaled_frame_directory)
-                    scaled_image_file = scaled_frame_directory + "/{:06d}.jpg".format(int(frameNum))
-                    cv2.imwrite(scaled_image_file, scaled_frame)
+        for idx in range(len(sequences)):
+            if not idx in bad_sequences:
+                sequence = sequences[idx]
+                start = sequence[0]
+                end = sequence[1]
+                if (frameNum in range(start,end)):
+                    frame_directory = args.output_path + '/' + args.source_name + '/' + "{:06d}_".format(int(start)) + "{:06d}".format(int(end)) + '/frames'
+                    if not os.path.exists(frame_directory):
+                        os.makedirs(frame_directory)
+                    image_file = frame_directory + "/{:06d}.jpg".format(int(frameNum))
+                    cv2.imwrite(image_file, frame)
+                    if (args.scale_frames):
+                        scaled_frame = cv2.resize(frame, args.scale_frames[::-1], interpolation=cv2.INTER_LINEAR)
+                        scaled_frame_directory = args.output_path + '/' + args.source_name + '/' + "{:06d}_".format(int(start)) + "{:06d}".format(int(end)) + '/scaled_frames'
+                        if not os.path.exists(scaled_frame_directory):
+                            os.makedirs(scaled_frame_directory)
+                        scaled_image_file = scaled_frame_directory + "/{:06d}.jpg".format(int(frameNum))
+                        cv2.imwrite(scaled_image_file, scaled_frame)
         frameNum += 1
         ret, frame = video_cap.read()
 
@@ -268,8 +279,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     sequences, action_list = select_sequences(args)
+    bad_sequences = []
     if (args.fetch_gt):
-        construct_gt(args, sequences, action_list)
+        bad_sequences = construct_gt(args, sequences, action_list)
 
     if (args.fetch_frames):
         generate_frames(args, sequences)
