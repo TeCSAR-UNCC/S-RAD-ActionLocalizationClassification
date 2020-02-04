@@ -170,11 +170,9 @@ def construct_numpy_gt(gt_list, actor_list):
             frame_annotations[i,1] = actor_list[i]
         for action in action_list:
             label = action["label"]
-            label_idx = label_dict[label]
-            if label_idx < 0:
+            if not label in label_dict:
                 return 0, 1
-            else:
-                label_idx += 6
+            label_idx = label_dict[label] + 6
             actors = action["actors"]
             for actor in actors:
                 actor_id = actor["actor_id"]
@@ -284,7 +282,7 @@ if __name__ == "__main__":
         bad_sequences = construct_gt(args, sequences, action_list)
 
     if (args.fetch_frames):
-        generate_frames(args, sequences)
+        generate_frames(args, sequences, bad_sequences)
     
     seq_array = np.array(sequences)
     seq_lengths = seq_array[:,1]-seq_array[:,0]
