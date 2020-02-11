@@ -20,27 +20,30 @@ import torch
 from torch.autograd import Variable
 import torch.nn as nn
 import torch.optim as optim
+import torchvision
 
-import torchvision.transforms as transforms
+
 from torch.utils.data.sampler import Sampler
+from data_loader.data_load import Action_dataset
+from dataset_config import dataset
+from dataset_config.transforms import *
+from tensorboardX import SummaryWriter
 
+import multiprocessing
+multiprocessing.set_start_method('spawn', True)
 #from roi_data_layer.roidb import combined_roidb
 #from roi_data_layer.roibatchLoader import roibatchLoader
 from model.utils.config import cfg, cfg_from_file, cfg_from_list, get_output_dir
-#from model.utils.net_utils import weights_normal_init, save_net, load_net, \
-#      adjust_learning_rate, save_checkpoint, clip_gradient
+from model.utils.net_utils import weights_normal_init, save_net, load_net, \
+      adjust_learning_rate, save_checkpoint, clip_gradient
 
-#from model.faster_rcnn.vgg16 import vgg16
 from model.faster_rcnn.resnet import resnet
-
 def parse_args():
   """
   Parse input arguments
   """
   parser = argparse.ArgumentParser(description='Train a Fast R-CNN network')
-  parser.add_argument('--dataset', dest='dataset',
-                      help='training dataset',
-                      default='pascal_voc', type=str)
+  
   parser.add_argument('--net', dest='net',
                     help='vgg16, res101',
                     default='vgg16', type=str)
@@ -88,10 +91,23 @@ def parse_args():
   parser.add_argument('--non_local', default=False, action="store_true", help='add non local block')
   parser.add_argument('--tune_from', type=str, default=None, help='fine-tune from checkpoint')
 
+# dataset arguments from temporal segment networks
+  parser.add_argument('--dataset', dest='dataset',
+                      help='training dataset',
+                      default='virat', type=str)
+  parser.add_argument('modality', type=str, choices=['RGB', 'Flow'])
+  parser.add_argument('--train_list', type=str, default="")
+  parser.add_argument('--val_list', type=str, default="")
+  parser.add_argument('--num_segments', type=int, default=3)
+  parser.add_argument('--dense_sample', default=False, action="store_true", 
+  help='use dense sample for video dataset')
+
 # config optimization
   parser.add_argument('--o', dest='optimizer',
                       help='training optimizer',
                       default="sgd", type=str)
+  parser.add_argument('--lr_type', default='step', type=str,
+                    metavar='LRtype', help='learning rate type')
   parser.add_argument('--lr', dest='lr',
                       help='starting learning rate',
                       default=0.001, type=float)
@@ -105,7 +121,10 @@ def parse_args():
 # set training session
   parser.add_argument('--s', dest='session',
                       help='training session',
-                      default=1, type=int)
+                      default=1, type=int) 
+# set log and model root folders
+  parser.add_argument('--root_log',type=str, default='log')
+  parser.add_argument('--root_model', type=str, default='checkpoint')
 
 # resume trained model
   parser.add_argument('--r', dest='resume',
@@ -128,68 +147,29 @@ def parse_args():
   args = parser.parse_args()
   return args
 
-
-class sampler(Sampler):
-  def __init__(self, train_size, batch_size):
-    self.num_data = train_size
-    self.num_per_batch = int(train_size / batch_size)
-    self.batch_size = batch_size
-    self.range = torch.arange(0,batch_size).view(1, batch_size).long()
-    self.leftover_flag = False
-    if train_size % batch_size:
-      self.leftover = torch.arange(self.num_per_batch*batch_size, train_size).long()
-      self.leftover_flag = True
-
-  def __iter__(self):
-    rand_num = torch.randperm(self.num_per_batch).view(-1,1) * self.batch_size
-    self.rand_num = rand_num.expand(self.num_per_batch, self.batch_size) + self.range
-
-    self.rand_num_view = self.rand_num.view(-1)
-
-    if self.leftover_flag:
-      self.rand_num_view = torch.cat((self.rand_num_view, self.leftover),0)
-
-    return iter(self.rand_num_view)
-
-  def __len__(self):
-    return self.num_data
-
 if __name__ == '__main__':
 
   args = parse_args()
-
   print('Called with args:')
   print(args)
 
-  '''if args.dataset == "pascal_voc":
-      args.imdb_name = "voc_2007_trainval"
-      args.imdbval_name = "voc_2007_test"
-      args.set_cfgs = ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '20']
-  elif args.dataset == "pascal_voc_0712":
-      args.imdb_name = "voc_2007_trainval+voc_2012_trainval"
-      args.imdbval_name = "voc_2007_test"
-      args.set_cfgs = ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '20']
-  elif args.dataset == "coco":
-      args.imdb_name = "coco_2014_train+coco_2014_valminusminival"
-      args.imdbval_name = "coco_2014_minival"
-      args.set_cfgs = ['ANCHOR_SCALES', '[4, 8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '50']
-  elif args.dataset == "imagenet":
-      args.imdb_name = "imagenet_train"
-      args.imdbval_name = "imagenet_val"
-      args.set_cfgs = ['ANCHOR_SCALES', '[4, 8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '30']
-  elif args.dataset == "vg":
-      # train sizes: train, smalltrain, minitrain
-      # train scale: ['150-50-20', '150-50-50', '500-150-80', '750-250-150', '1750-700-450', '1600-400-20']
-      args.imdb_name = "vg_150-50-50_minitrain"
-      args.imdbval_name = "vg_150-50-50_minival"
-      args.set_cfgs = ['ANCHOR_SCALES', '[4, 8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '50']'''
+  if args.dataset == "virat":args.set_cfgs = ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', 
+      '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '20']
 
+  args.store_name = '_'.join(
+        ['Action_proposal', args.dataset, args.modality, args.net, 'segment%d' % args.num_segments,
+         'e{}'.format(args.max_epochs)])
+  if args.pretrain != 'imagenet':
+        args.store_name += '_{}'.format(args.pretrain)
+  print('storing name: ' + args.store_name)
+  
+  num_class, args.train_list, args.val_list,args.test_list, train_path, val_path, test_path= dataset.return_dataset(args.dataset,args.modality)
   args.cfg_file = "cfgs/{}_ls.yml".format(args.net) if args.large_scale else "cfgs/{}.yml".format(args.net)
 
-  #if args.cfg_file is not None:
-  #  cfg_from_file(args.cfg_file)
-  #if args.set_cfgs is not None:
-  #  cfg_from_list(args.set_cfgs)
+  if args.cfg_file is not None:
+    cfg_from_file(args.cfg_file)
+  if args.set_cfgs is not None:
+    cfg_from_list(args.set_cfgs)
 
   print('Using config:')
   pprint.pprint(cfg)
@@ -198,27 +178,34 @@ if __name__ == '__main__':
   #torch.backends.cudnn.benchmark = True
   if torch.cuda.is_available() and not args.cuda:
     print("WARNING: You have a CUDA device, so you should probably run with --cuda")
+  
   # train set
   # -- Note: Use validation set and disable the flipped to enable faster loading.
-  cfg.TRAIN.USE_FLIPPED = True
+  #cfg.TRAIN.USE_FLIPPED = True
   cfg.USE_GPU_NMS = args.cuda
-
-  '''imdb, roidb, ratio_list, ratio_index = combined_roidb(args.imdb_name)
-  train_size = len(roidb)
-
-  print('{:d} roidb entries'.format(len(roidb)))
 
   output_dir = args.save_dir + "/" + args.net + "/" + args.dataset
   if not os.path.exists(output_dir):
-    os.makedirs(output_dir)
+          os.makedirs(output_dir)
 
-  sampler_batch = sampler(train_size, args.batch_size)
+  #dataloader
+  #train_augmentation = fasterRCNN.get_augmentation(flip=False if 'something' in args.dataset or 'jester' in args.dataset else True)
+  input_size =600
+  input_mean = [0.485, 0.456, 0.406]
+  input_std = [0.229, 0.224, 0.225]
+  normalize = GroupNormalize(input_mean, input_std)
 
-  dataset = roibatchLoader(roidb, ratio_list, ratio_index, args.batch_size, \
-                           imdb.num_classes, training=True)
-
-  dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size,
-                            sampler=sampler_batch, num_workers=args.num_workers)
+  train_loader = torch.utils.data.DataLoader(
+        Action_dataset(train_path, args.train_list, num_segments=args.num_segments,
+                   modality=args.modality,random_shift=True, test_mode=False,
+                   input_size = input_size,
+                   transform=torchvision.transforms.Compose([ 
+                       ToTorchFormatTensor(div=1),
+                       normalize]),dense_sample =False,uniform_sample=False,
+                 random_sample = False,strided_sample = False),
+        batch_size=args.batch_size, shuffle=True,
+        num_workers=args.num_workers, pin_memory=True,
+        drop_last=True)  # prevent something not % n_GPU
 
   # initilize the tensor holder here.
   im_data = torch.FloatTensor(1)
@@ -237,7 +224,7 @@ if __name__ == '__main__':
   im_data = Variable(im_data)
   im_info = Variable(im_info)
   num_boxes = Variable(num_boxes)
-  gt_boxes = Variable(gt_boxes)'''
+  gt_boxes = Variable(gt_boxes)
   
   if args.cuda:
     cfg.CUDA = True
@@ -246,12 +233,12 @@ if __name__ == '__main__':
   if args.net == 'vgg16':
    fasterRCNN = vgg16(imdb.classes, pretrained=True, class_agnostic=args.class_agnostic)  
   elif args.net == 'res101':
-   fasterRCNN = resnet(imdb.classes, 101, pretrained=True, class_agnostic=args.class_agnostic)
+   fasterRCNN = resnet(imdb.classes, 101,modality=args.modality ,pretrained=True, class_agnostic=args.class_agnostic)
   elif args.net == 'res50':
    base_model ='resnet50'
-   fasterRCNN = resnet(51, 50, base_model ='resnet50', n_segments =8,
+   fasterRCNN = resnet(num_class,modality = 'RGB',num_layers =50, base_model ='resnet50', n_segments =8,
                n_div =args.shift_div , place = args.shift_place,temporal_pool = args.temporal_pool,
-               pretrain = args.pretrain,shift = args.shift,non_local = args.non_local,
+               pretrain = args.pretrain,shift = args.shift,
                class_agnostic=args.class_agnostic)
   elif args.net == 'res152':
    fasterRCNN = resnet(imdb.classes, 152, pretrained=True, class_agnostic=args.class_agnostic)
@@ -259,12 +246,10 @@ if __name__ == '__main__':
    print("network is not defined")
    pdb.set_trace()
 
-  fasterRCNN.create_architecture(base_model)
+  fasterRCNN.create_architecture()
 
- #lr = cfg.TRAIN.LEARNING_RATE
+  lr = cfg.TRAIN.LEARNING_RATE
   lr = args.lr
- #tr_momentum = cfg.TRAIN.MOMENTUM
-  #tr_momentum = args.momentum
 
   params = []
   for key, value in dict(fasterRCNN.named_parameters()).items():
@@ -283,14 +268,14 @@ if __name__ == '__main__':
 
   elif args.optimizer == "sgd":
     optimizer = torch.optim.SGD(params, momentum=cfg.TRAIN.MOMENTUM)
+  
+  ## adding temporal shift pretrained kinetics weights
 
   if args.tune_from:
         print(("=> fine-tuning from '{}'".format(args.tune_from)))
         sd = torch.load(args.tune_from)
         sd = sd['state_dict']
         model_dict = fasterRCNN.state_dict()
-        replace_dict = []
-
         replace_dict = []
         for k, v in sd.items():
             if k not in model_dict:
@@ -315,6 +300,7 @@ if __name__ == '__main__':
                 .replace('module.base_model.layer4.0.','RCNN_top.0.0.')
                 .replace('module.base_model.layer4.1','RCNN_top.0.1')
                 .replace('module.base_model.layer4.2','RCNN_top.0.2'),k))
+                 
         for k_new, k in replace_dict:
             sd[k_new] = sd.pop(k)
         keys1 = set(list(sd.keys()))
@@ -324,8 +310,7 @@ if __name__ == '__main__':
         if args.dataset not in args.tune_from:  # new dataset
             print('=> New dataset, do not load fc weights')
             sd = {k: v for k, v in sd.items() if 'fc' not in k}
-       # if args.modality == 'Flow' and 'Flow' not in args.tune_from:
-       #     sd = {k: v for k, v in sd.items() if 'conv1.weight' not in k}
+      
         model_dict.update(sd)
         fasterRCNN.load_state_dict(model_dict)
 
@@ -343,53 +328,79 @@ if __name__ == '__main__':
       cfg.POOLING_MODE = checkpoint['pooling_mode']
     print("loaded checkpoint %s" % (load_name))
 
+  
   if args.mGPUs:
     fasterRCNN = nn.DataParallel(fasterRCNN)
 
-  iters_per_epoch = int(train_size / args.batch_size)
+  iters_per_epoch = int(len(train_loader.dataset) / args.batch_size)
+
+  folders_util = [args.root_log, args.root_model,
+                    os.path.join(args.root_log, args.store_name),
+                    os.path.join(args.root_model, args.store_name)]
+  for folder in folders_util:
+    if not os.path.exists(folder):
+      print('creating folder ' + folder)
+      os.mkdir(folder)
 
   if args.use_tfboard:
     from tensorboardX import SummaryWriter
     logger = SummaryWriter("logs")
-
   for epoch in range(args.start_epoch, args.max_epochs + 1):
+    
     # setting to train mode
     fasterRCNN.train()
     loss_temp = 0
     start = time.time()
-
+    
     if epoch % (args.lr_decay_step + 1) == 0:
-        adjust_learning_rate(optimizer, args.lr_decay_gamma)
-        lr *= args.lr_decay_gamma
+      adjust_learning_rate(optimizer, args.lr_decay_gamma)
+      lr *= args.lr_decay_gamma
 
-    data_iter = iter(dataloader)
+    #end = time.time()
+    #for i, (input, target,n_box,image_info) in enumerate(train_loader):
+    # data_time.update(time.time() - end)
+    data_iter = iter(train_loader)
     for step in range(iters_per_epoch):
-      data = next(data_iter)
-      with torch.no_grad():
+        data = next(data_iter)
+         # measure data loading time
+         #data_time.update(time.time() - end)
+        with torch.no_grad():
+              '''im_data.resize_(input.size()).copy_(input)
+              im_info.resize_(image_info.size()).copy_(image_info)
+              gt_boxes.resize_(target.size()).copy_(target)
+              num_boxes.resize_(n_box.size()).copy_(n_box)'''
               im_data.resize_(data[0].size()).copy_(data[0])
-              im_info.resize_(data[1].size()).copy_(data[1])
-              gt_boxes.resize_(data[2].size()).copy_(data[2])
-              num_boxes.resize_(data[3].size()).copy_(data[3])
-
-      fasterRCNN.zero_grad()
-      rois, cls_prob, bbox_pred, \
-      rpn_loss_cls, rpn_loss_box, \
-      RCNN_loss_cls, RCNN_loss_bbox, \
-      rois_label = fasterRCNN(im_data, im_info, gt_boxes, num_boxes)
-
-      loss = rpn_loss_cls.mean() + rpn_loss_box.mean() \
-           + RCNN_loss_cls.mean() + RCNN_loss_bbox.mean()
-      loss_temp += loss.item()
-
-      # backward
-      optimizer.zero_grad()
-      loss.backward()
-      if args.net == "vgg16":
+              gt_boxes.resize_(data[1].size()).copy_(data[1])
+              num_boxes.resize_(data[2].size()).copy_(data[2])
+              im_info.resize_(data[3].size()).copy_(data[3])
+              imgsize1 = im_data.size(3)
+              imgsize2 = im_data.size(4)
+              channel = im_data.size(2)
+              im_data = im_data.view(-1,channel,imgsize1,imgsize2)
+              im_info = im_info.view(-1,3)
+              gt_boxes= gt_boxes.view(-1,30,44)
+              num_boxes = num_boxes.view(-1)
+        
+        fasterRCNN.zero_grad()
+        # compute output
+        rois, cls_prob, bbox_pred, \
+        rpn_loss_cls, rpn_loss_box, \
+        RCNN_loss_cls, RCNN_loss_bbox, \
+        rois_label = fasterRCNN(im_data,im_info,gt_boxes,num_boxes)
+         
+        loss = rpn_loss_cls.mean() + rpn_loss_box.mean() \
+        + RCNN_loss_cls.mean() + RCNN_loss_bbox.mean()
+        loss_temp += loss.item()
+         
+        # backward
+        optimizer.zero_grad()
+        loss.backward()
+        if args.net == "vgg16":
           clip_gradient(fasterRCNN, 10.)
-      optimizer.step()
+        optimizer.step()
 
-      if step % args.disp_interval == 0:
-        end = time.time()
+        if step % args.disp_interval == 0:
+         end = time.time()
         if step > 0:
           loss_temp /= (args.disp_interval + 1)
 

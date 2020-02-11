@@ -23,9 +23,8 @@ class _fasterRCNN(nn.Module):
     """ faster RCNN """
     def __init__(self, classes, class_agnostic):
         super(_fasterRCNN, self).__init__()
-        #self.classes = classes
+        self.classes = classes
         self.n_classes = classes
-        #self.n_classes = len(classes)
         self.class_agnostic = class_agnostic
         # loss
         self.RCNN_loss_cls = 0
@@ -58,8 +57,9 @@ class _fasterRCNN(nn.Module):
         if self.training:
             roi_data = self.RCNN_proposal_target(rois, gt_boxes, num_boxes)
             rois, rois_label, rois_target, rois_inside_ws, rois_outside_ws = roi_data
-
-            rois_label = Variable(rois_label.view(-1).long())
+            max_label,_ = torch.max(rois_label,2)
+            max_label = Variable(max_label.view(-1).long())
+            rois_label = Variable(rois_label.view(-1,40).long()) #modified
             rois_target = Variable(rois_target.view(-1, rois_target.size(2)))
             rois_inside_ws = Variable(rois_inside_ws.view(-1, rois_inside_ws.size(2)))
             rois_outside_ws = Variable(rois_outside_ws.view(-1, rois_outside_ws.size(2)))
@@ -73,11 +73,11 @@ class _fasterRCNN(nn.Module):
 
         rois = Variable(rois)
         # do roi pooling based on predicted rois
-
-        if cfg.POOLING_MODE == 'align':
-            pooled_feat = self.RCNN_roi_align(base_feat, rois.view(-1, 5))
-        elif cfg.POOLING_MODE == 'pool':
-            pooled_feat = self.RCNN_roi_pool(base_feat, rois.view(-1,5))
+        #cfg.POOLING_MODE == 'align'
+        #if cfg.POOLING_MODE == 'align':
+        pooled_feat = self.RCNN_roi_align(base_feat, rois.view(-1, 5))
+        #elif cfg.POOLING_MODE == 'pool':
+        #    pooled_feat = self.RCNN_roi_pool(base_feat, rois.view(-1,5))
 
         # feed pooled features to top model
         pooled_feat = self._head_to_tail(pooled_feat)
@@ -87,7 +87,7 @@ class _fasterRCNN(nn.Module):
         if self.training and not self.class_agnostic:
             # select the corresponding columns according to roi labels
             bbox_pred_view = bbox_pred.view(bbox_pred.size(0), int(bbox_pred.size(1) / 4), 4)
-            bbox_pred_select = torch.gather(bbox_pred_view, 1, rois_label.view(rois_label.size(0), 1, 1).expand(rois_label.size(0), 1, 4))
+            bbox_pred_select = torch.gather(bbox_pred_view, 1, max_label.view(max_label.size(0),1,1).expand(max_label.size(0),1,4))
             bbox_pred = bbox_pred_select.squeeze(1)
 
         # compute object classification probability
@@ -96,10 +96,10 @@ class _fasterRCNN(nn.Module):
 
         RCNN_loss_cls = 0
         RCNN_loss_bbox = 0
-
+        rois_label = rois_label.type_as(cls_score)
         if self.training:
             # classification loss
-            RCNN_loss_cls = F.cross_entropy(cls_score, rois_label)
+            RCNN_loss_cls = F.binary_cross_entropy_with_logits(cls_score, rois_label)
 
             # bounding box regression L1 loss
             RCNN_loss_bbox = _smooth_l1_loss(bbox_pred, rois_target, rois_inside_ws, rois_outside_ws)
@@ -128,6 +128,6 @@ class _fasterRCNN(nn.Module):
         normal_init(self.RCNN_cls_score, 0, 0.01, cfg.TRAIN.TRUNCATED)
         normal_init(self.RCNN_bbox_pred, 0, 0.001, cfg.TRAIN.TRUNCATED)
 
-    def create_architecture(self,base_model):
-        self._init_modules(base_model)
+    def create_architecture(self):
+        self._init_modules()
         self._init_weights()

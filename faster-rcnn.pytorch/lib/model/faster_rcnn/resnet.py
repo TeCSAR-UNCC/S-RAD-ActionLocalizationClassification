@@ -190,84 +190,33 @@ def resnet50(pretrained=False):
   Args:
     pretrained (bool): If True, returns a model pre-trained on ImageNet
   """
-  base_model = 'resnet50'
-  import torchvision
-  model = getattr(torchvision.models, base_model)(True if self.pretrain == 'imagenet' else False)
-            
-  #model = ResNet(Bottleneck, [3, 4, 6, 3])
-  #if pretrained:
-  #  model.load_state_dict(model_zoo.load_url(model_urls['resnet50']))
+  model = ResNet(Bottleneck, [3, 4, 6, 3])
+  if pretrained:
+    model.load_state_dict(model_zoo.load_url(model_urls['resnet50']))
   return model
 
-def _prepare_base_model(self, base_model):
-        print('=> base model: {}'.format(base_model))
+def _prepare_base_model(self):
+        print('=> base model: {}'.format('resnet'))
 
-        if 'resnet' in base_model:
-            import torchvision
-            resnet = getattr(torchvision.models, base_model)(True if self.pretrain == 'imagenet' else False)
-            if self.shift:
+        model = ResNet(Bottleneck, [3, 4, 6, 3])
+        if self.pretrain == 'imagenet':
+           model.load_state_dict(model_zoo.load_url(model_urls['resnet50']))
+              
+        #import torchvision
+        #resnet = getattr(torchvision.models, base_model)(True if self.pretrain == 'imagenet' else False)
+        if self.shift:
                 print('Adding temporal shift...')
                 from ops.temporal_shift import make_temporal_shift
-                make_temporal_shift(resnet, self.n_segments,
+                make_temporal_shift(model, self.n_segments,
                                     n_div=self.shift_div, place=self.shift_place, temporal_pool=self.temporal_pool)
 
-            if self.non_local:
-                print('Adding non-local module...')
-                from ops.non_local import make_non_local
-                make_non_local(resnet, self.num_segments)
+        model.last_layer_name = 'fc'
+        self.input_size = 600,600
+        self.input_mean = [0.485, 0.456, 0.406]
+        self.input_std = [0.229, 0.224, 0.225]
 
-            resnet.last_layer_name = 'fc'
-            self.input_size = 224
-            self.input_mean = [0.485, 0.456, 0.406]
-            self.input_std = [0.229, 0.224, 0.225]
-
-            resnet.avgpool = nn.AdaptiveAvgPool2d(1)
-
-
-            
-        elif base_model == 'mobilenetv2':
-            from archs.mobilenet_v2 import mobilenet_v2, InvertedResidual
-            self.base_model = mobilenet_v2(True if self.pretrain == 'imagenet' else False)
-
-            self.base_model.last_layer_name = 'classifier'
-            self.input_size = 224
-            self.input_mean = [0.485, 0.456, 0.406]
-            self.input_std = [0.229, 0.224, 0.225]
-
-            self.base_model.avgpool = nn.AdaptiveAvgPool2d(1)
-            if self.is_shift:
-                from ops.temporal_shift import TemporalShift
-                for m in self.base_model.modules():
-                    if isinstance(m, InvertedResidual) and len(m.conv) == 8 and m.use_res_connect:
-                        if self.print_spec:
-                            print('Adding temporal shift... {}'.format(m.use_res_connect))
-                        m.conv[0] = TemporalShift(m.conv[0], n_segment=self.num_segments, n_div=self.shift_div)
-            if self.modality == 'Flow':
-                self.input_mean = [0.5]
-                self.input_std = [np.mean(self.input_std)]
-            elif self.modality == 'RGBDiff':
-                self.input_mean = [0.485, 0.456, 0.406] + [0] * 3 * self.new_length
-                self.input_std = self.input_std + [np.mean(self.input_std) * 2] * 3 * self.new_length
-
-        elif base_model == 'BNInception':
-            from archs.bn_inception import bninception
-            self.base_model = bninception(pretrained=self.pretrain)
-            self.input_size = self.base_model.input_size
-            self.input_mean = self.base_model.mean
-            self.input_std = self.base_model.std
-            self.base_model.last_layer_name = 'fc'
-            if self.modality == 'Flow':
-                self.input_mean = [128]
-            elif self.modality == 'RGBDiff':
-                self.input_mean = self.input_mean * (1 + self.new_length)
-            if self.is_shift:
-                print('Adding temporal shift...')
-                self.base_model.build_temporal_ops(
-                    self.num_segments, is_temporal_shift=self.shift_place, shift_div=self.shift_div)
-        else:
-            raise ValueError('Unknown base model: {}'.format(base_model))
-        return resnet
-
+        model.avgpool = nn.AdaptiveAvgPool2d(1)
+        return model
 
 def resnet101(pretrained=False):
   """Constructs a ResNet-101 model.
@@ -291,10 +240,10 @@ def resnet152(pretrained=False):
   return model
 
 class resnet(_fasterRCNN):
-  def __init__(self, classes, num_layers=101,base_model ='resnet50', n_segments =8,
-               n_div =8 , place = 'blockres',temporal_pool = 'false',
-               pretrain = 'imagenet',shift = 'true', non_local = 'false',
-               class_agnostic=False):
+  def __init__(self, classes, modality = 'RGB',num_layers=101,base_model ='resnet50',
+               n_segments =8,n_div =8 , place = 'blockres',temporal_pool = 'false',
+               pretrain = 'imagenet',shift = 'true',class_agnostic = 'false'):
+    self.model_path = 'data/pretrained_model/resnet101_caffe.pth'
     self.dout_base_model = 1024
     self.pretrain = pretrain
     self.shift = shift
@@ -302,28 +251,24 @@ class resnet(_fasterRCNN):
     self.shift_div = n_div
     self.shift_place = place
     self.temporal_pool=temporal_pool
-    self.non_local = non_local
     self.class_agnostic = class_agnostic
-    
+    self.modality = modality
+
     _fasterRCNN.__init__(self, classes, class_agnostic)
 
-  
-  def _init_modules(self,base_model):
-    #import torchvision
-    #resnet = getattr(torchvision.models, base_model)(True if self.pretrain == 'imagenet' else False)
-    resnet = _prepare_base_model(self,base_model)
-    #if self.pretrained == True:
-    #  print("Loading pretrained weights from %s" %(self.model_path))
-    #  state_dict = torch.load(self.model_path)
-    #  resnet.load_state_dict({k:v for k,v in state_dict.items() if k in resnet.state_dict()})
-    
+  def _init_modules(self):
+    resnet = _prepare_base_model(self)
+    #resnet = resnet101()
+
+    '''if self.pretrained == True:
+      print("Loading pretrained weights from %s" %(self.model_path))
+      state_dict = torch.load(self.model_path)
+      resnet.load_state_dict({k:v for k,v in state_dict.items() if k in resnet.state_dict()})'''
+
     # Build resnet.
     self.RCNN_base = nn.Sequential(resnet.conv1, resnet.bn1,resnet.relu,
       resnet.maxpool,resnet.layer1,resnet.layer2,resnet.layer3)
-    #self.RCNN_base = nn.Sequential(self.base_model.conv1,self.base_model.bn1,
-    #          self.base_model.relu,self.base_model.maxpool,self.base_model.layer1,
-    #          self.base_model.layer2,self.base_model.layer3)
-    #self.RCNN_top = nn.Sequential(self.base_model.layer4)
+
     self.RCNN_top = nn.Sequential(resnet.layer4)
 
     self.RCNN_cls_score = nn.Linear(2048, self.n_classes)
@@ -336,13 +281,13 @@ class resnet(_fasterRCNN):
     for p in self.RCNN_base[0].parameters(): p.requires_grad=False
     for p in self.RCNN_base[1].parameters(): p.requires_grad=False
 
-    '''assert (0 <= cfg.RESNET.FIXED_BLOCKS < 4)
+    assert (0 <= cfg.RESNET.FIXED_BLOCKS < 4)
     if cfg.RESNET.FIXED_BLOCKS >= 3:
       for p in self.RCNN_base[6].parameters(): p.requires_grad=False
     if cfg.RESNET.FIXED_BLOCKS >= 2:
       for p in self.RCNN_base[5].parameters(): p.requires_grad=False
     if cfg.RESNET.FIXED_BLOCKS >= 1:
-      for p in self.RCNN_base[4].parameters(): p.requires_grad=False'''
+      for p in self.RCNN_base[4].parameters(): p.requires_grad=False
 
     def set_bn_fix(m):
       classname = m.__class__.__name__
@@ -351,8 +296,6 @@ class resnet(_fasterRCNN):
 
     self.RCNN_base.apply(set_bn_fix)
     self.RCNN_top.apply(set_bn_fix)
-
-  
 
   def train(self, mode=True):
     # Override train so that the training mode is set as we want
