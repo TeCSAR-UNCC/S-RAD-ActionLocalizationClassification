@@ -85,7 +85,8 @@ class _ProposalTargetLayer(nn.Module):
             # assert clss[b].sum() > 0
             if clss[b].sum() == 0:
                 continue
-            inds = torch.nonzero(clss[b] > 0).view(-1)
+            #inds = torch.nonzero(clss[b] > 0).view(-1)
+            inds = torch.nonzero(clss[b] > 0)[:,0]
             for i in range(inds.numel()):
                 ind = inds[i]
                 bbox_targets[b, ind, :] = bbox_target_data[b, ind, :]
@@ -126,28 +127,17 @@ class _ProposalTargetLayer(nn.Module):
         num_boxes_per_img = overlaps.size(2)
 
         max_overlaps, gt_assignment = torch.max(overlaps, 2)
-        gt = gt_assignment
-        #adding extra
-        gt_assignment = gt_assignment.view(batch_size, num_proposal, 1).expand(batch_size, num_proposal, 40).contiguous()
         
-
-        offset = torch.arange(0, batch_size)*gt_boxes.size(1)
-        offset = offset.view(batch_size, 1).expand(batch_size, num_proposal).contiguous()
-       # offset = offset.view(batch_size,num_proposal,1).expand(batch_size,num_proposal,40).contiguous()
-        offset = offset.view(batch_size,-1, 1).type_as(gt_assignment) + gt_assignment
-
+        #adding extra
+        #offset = torch.arange(0, batch_size)*gt_boxes.size(1)
+        #offset = offset.view(-1, 1).type_as(gt_assignment) + gt_assignment
+        #offset = offset.view(batch_size,-1,1).expand(batch_size,-1,40).contiguous()
         # changed indexing way for pytorch 1.0
-        labels = gt_boxes[:,:,4:].contiguous().view(-1)[(offset.view(-1),)].view(batch_size, -1, 40)
+        #labels = gt_boxes[:,:,4:].contiguous().view(-1)[(offset.view(-1),)].view(batch_size, -1, 40)
 
-        # changed indexing way for pytorch 1.0
-        '''box = gt_boxes[:,:,4:].contiguous().view(-1,40)
-        box = box.view(-1)
-        new_offset = offsets.contiguous().view(-1,40)
-        new_offset = new_offset.view(-1)
-        labels = box[(new_offset),].view(batch_size,-1,40)'''
         #labels = gt_boxes[:,:,4].contiguous().view(-1)[(offset.view(-1),)].view(batch_size, -1)
-
-        labels_batch = labels.new(batch_size, rois_per_image,40).zero_()
+        gt = gt_boxes[:,:,4:]
+        labels_batch = all_rois.new(batch_size, rois_per_image,40).zero_()
         rois_batch  = all_rois.new(batch_size, rois_per_image, 5).zero_()
         gt_rois_batch = all_rois.new(batch_size, rois_per_image, 44).zero_()
         # Guard against the case when an image has fewer than max_fg_rois_per_image
@@ -207,8 +197,8 @@ class _ProposalTargetLayer(nn.Module):
             keep_inds = torch.cat([fg_inds, bg_inds], 0)
 
             # Select sampled values from various arrays:
-            labels_batch[i].copy_(labels[i][keep_inds][:])
-
+            #labels_batch[i].copy_(labels[i][keep_inds][:])
+            labels_batch[i] = gt[i][gt_assignment[i][keep_inds]]
             # Clamp labels for the background RoIs to 0
             if fg_rois_per_this_image < rois_per_image:
                 labels_batch[i][fg_rois_per_this_image:][:] = 0
@@ -216,7 +206,7 @@ class _ProposalTargetLayer(nn.Module):
             rois_batch[i] = all_rois[i][keep_inds]
             rois_batch[i,:,0] = i
 
-            gt_rois_batch[i] = gt_boxes[i][gt[i][keep_inds]]
+            gt_rois_batch[i] = gt_boxes[i][gt_assignment[i][keep_inds]]
 
         bbox_target_data = self._compute_targets_pytorch(
                 rois_batch[:,:,1:5], gt_rois_batch[:,:,:4])

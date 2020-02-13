@@ -153,7 +153,7 @@ if __name__ == '__main__':
   print('Called with args:')
   print(args)
 
-  if args.dataset == "virat":args.set_cfgs = ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', 
+  if args.dataset == "virat":args.set_cfgs = ['ANCHOR_SCALES', '[2, 4, 8]', 'ANCHOR_RATIOS', 
       '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '20']
 
   args.store_name = '_'.join(
@@ -164,7 +164,7 @@ if __name__ == '__main__':
   print('storing name: ' + args.store_name)
   
   num_class, args.train_list, args.val_list,args.test_list, train_path, val_path, test_path= dataset.return_dataset(args.dataset,args.modality)
-  args.cfg_file = "cfgs/{}_ls.yml".format(args.net) if args.large_scale else "cfgs/{}.yml".format(args.net)
+  args.cfg_file = "cfgs/{}_ls.yml".format(args.net) if args.large_scale else "/home/malar/git_sam/Action-Proposal-Networks/faster-rcnn.pytorch/cfgs/{}.yml".format(args.net)
 
   if args.cfg_file is not None:
     cfg_from_file(args.cfg_file)

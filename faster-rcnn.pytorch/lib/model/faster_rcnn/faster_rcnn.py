@@ -57,8 +57,8 @@ class _fasterRCNN(nn.Module):
         if self.training:
             roi_data = self.RCNN_proposal_target(rois, gt_boxes, num_boxes)
             rois, rois_label, rois_target, rois_inside_ws, rois_outside_ws = roi_data
-            max_label,_ = torch.max(rois_label,2)
-            max_label = Variable(max_label.view(-1).long())
+            #max_label,_ = torch.max(rois_label,2)
+            #max_label = Variable(max_label.view(-1).long())
             rois_label = Variable(rois_label.view(-1,40).long()) #modified
             rois_target = Variable(rois_target.view(-1, rois_target.size(2)))
             rois_inside_ws = Variable(rois_inside_ws.view(-1, rois_inside_ws.size(2)))
@@ -87,8 +87,8 @@ class _fasterRCNN(nn.Module):
         if self.training and not self.class_agnostic:
             # select the corresponding columns according to roi labels
             bbox_pred_view = bbox_pred.view(bbox_pred.size(0), int(bbox_pred.size(1) / 4), 4)
-            bbox_pred_select = torch.gather(bbox_pred_view, 1, max_label.view(max_label.size(0),1,1).expand(max_label.size(0),1,4))
-            bbox_pred = bbox_pred_select.squeeze(1)
+            bbox_pred_select = torch.gather(bbox_pred_view, 1, rois_label.view(rois_label.size(0),40,1).expand(rois_label.size(0),40,4))
+            bbox_pred = bbox_pred_select.mean(1)
 
         # compute object classification probability
         cls_score = self.RCNN_cls_score(pooled_feat)

@@ -183,18 +183,18 @@ class Action_dataset(data.Dataset):
                     height,width,_= im.shape #h=1080,w=1920
                     im_size_min= min(height,width)
                     im_size_max = max(height,width)
-                    new_w = float(im_size_max * new_size) / im_size_min
+                    #new_w = float(im_size_max * new_size) / im_size_min
                     im_scale = float(new_size) / float(im_size_min)
                     im = cv2.resize(im, None, None, fx=im_scale, fy=im_scale,
                     interpolation=cv2.INTER_LINEAR)
-                    im_info[j,:]=new_size,new_w,im_scale
+                    im_info[j,:]=new_size,len(im[2]),im_scale
                    
                     for i in data:
                         if i[0] == p:
                             bbox_new =[]
                             bbox = (i[2:6])*im_scale
-                            y1,x1,y2,x2=bbox
-                            bbox_new[0:4] = x1,y1,x2,y2
+                            #y1,x1,y2,x2=bbox
+                            bbox_new[0:4] = bbox
                             #differ=new_y2 - new_y1
                             #diff.append(differ)
                             #label=(i[6:]).tolist()
@@ -205,13 +205,14 @@ class Action_dataset(data.Dataset):
                             bboxes[count,:]+=bbox_new
                             count+=1
                             
-                    num_boxes[j,]+=count+1
+                    num_boxes[j,]+=count
                     gt[j,:,:] = bboxes
                     j = j+1     
                     images.append(im)
       
+      max_shape = np.array([imz.shape for imz in images]).max(axis=0)
       num_images = len(images)
-      blob = np.zeros((num_images,600,1067, 3),
+      blob = np.zeros((num_images, max_shape[0], max_shape[1], 3),
                     dtype=np.float32)
       for i in range(len(images)):
         im1 = images[i]
