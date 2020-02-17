@@ -144,19 +144,11 @@ class Action_dataset(data.Dataset):
       #sequence_path=list()
       #train_file = '/mnt/AI_RAID/VIRAT/actev-data-repo/dataset/train/train_list.txt'
       sequence_path = str(record.path).strip().split('/frames/')[0]
-      '''global label
-      global bbox
-      global bboxes
-      global images
-      global gt
-      global count
-      global bbox_new
-      global im_info'''
-      #if (index == 0):
       label = list()
       bbox = list()
       #bbox_new=list()
       images = list()
+      img_path = list()
       gt = np.zeros((len(indices),30,44),
                   dtype=np.float32)
       num_boxes = np.zeros((8),dtype=np.float32)
@@ -188,7 +180,7 @@ class Action_dataset(data.Dataset):
                     im = cv2.resize(im, None, None, fx=im_scale, fy=im_scale,
                     interpolation=cv2.INTER_LINEAR)
                     im_info[j,:]=new_size,len(im[2]),im_scale
-                   
+                    img_path.append(image_path)
                     for i in data:
                         if i[0] == p:
                             bbox_new =[]
@@ -220,18 +212,7 @@ class Action_dataset(data.Dataset):
 
 
       process_data = self.transform(blob)
-      
-      '''process_data= np.array_split(process_data,8,axis =0)
-      data = []
-      dat = []
-      for i in process_data:
-        data = np.expand_dims(i, axis=0)
-        dat += [data]
-      image = np.concatenate(dat,axis=0)
-      print(np.any(np.isnan(image)))
-      print(np.any(np.isnan(gt)))
-      #im_info = im_info.view(3)'''
-      return process_data, gt, num_boxes , im_info
+      return process_data, gt, num_boxes , im_info ,img_path
 
       ''''for y in range(len(data["annotations"][seg_ind]['actions'])):#get the bbox in that frame
                 key,value = data["annotations"][seg_ind]['actions'][y].items()
