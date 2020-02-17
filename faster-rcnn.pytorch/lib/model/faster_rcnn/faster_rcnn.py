@@ -96,9 +96,10 @@ class _fasterRCNN(nn.Module):
 
         RCNN_loss_cls = 0
         RCNN_loss_bbox = 0
-        rois_label = rois_label.type_as(cls_score)
+        
         if self.training:
             # classification loss
+            rois_label = rois_label.type_as(cls_score)
             RCNN_loss_cls = F.binary_cross_entropy_with_logits(cls_score, rois_label)
 
             # bounding box regression L1 loss
