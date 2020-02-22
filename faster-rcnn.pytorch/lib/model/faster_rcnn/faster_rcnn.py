@@ -63,6 +63,9 @@ class _fasterRCNN(nn.Module):
             rois_target = Variable(rois_target.view(-1, rois_target.size(2)))
             rois_inside_ws = Variable(rois_inside_ws.view(-1, rois_inside_ws.size(2)))
             rois_outside_ws = Variable(rois_outside_ws.view(-1, rois_outside_ws.size(2)))
+            proposal_num = torch.nonzero(rois_label)[:,0]
+            class_num = torch.nonzero(rois_label)[:,1]
+
         else:
             rois_label = None
             rois_target = None
@@ -87,8 +90,18 @@ class _fasterRCNN(nn.Module):
         if self.training and not self.class_agnostic:
             # select the corresponding columns according to roi labels
             bbox_pred_view = bbox_pred.view(bbox_pred.size(0), int(bbox_pred.size(1) / 4), 4)
-            bbox_pred_select = torch.gather(bbox_pred_view, 1, rois_label.view(rois_label.size(0),40,1).expand(rois_label.size(0),40,4))
-            bbox_pred = bbox_pred_select.mean(1)
+            bbox_pred_select = bbox_pred_view.new(bbox_pred.size(0), 1, 4).zero_()
+            for i in range (proposal_num.shape[0]):
+                dup = torch.nonzero(proposal_num == proposal_num[i])
+                if (dup.shape[0] > 1):
+                   bbox_pred_select[proposal_num[i]] = bbox_pred_view[proposal_num[i],class_num[dup],:].mean(0)
+                    
+                else:
+                   bbox_pred_select[proposal_num[i]] = bbox_pred_view[proposal_num[i],class_num[i],:]
+                
+                    
+            #bbox_pred_select = torch.gather(bbox_pred_view, 1, rois_label.view(rois_label.size(0),40,1).expand(rois_label.size(0),40,4))
+            bbox_pred = bbox_pred_select
 
         # compute object classification probability
         cls_score = self.RCNN_cls_score(pooled_feat)
