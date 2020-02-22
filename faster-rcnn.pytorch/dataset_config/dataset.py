@@ -54,9 +54,9 @@ def return_virat(modality):
         train_data = ROOT_DATASET + 'VIRAT/actev-data-repo/dataset/train/'
         val_data = ROOT_DATASET + 'VIRAT/actev-data-repo/dataset/val/'
         test_data = ROOT_DATASET + 'VIRAT/actev-data-repo/dataset/test/'
-        filename_imglist_train = '/home/malar/faster_rcnn_1.0/faster-rcnn.pytorch/train_list.txt'
-        filename_imglist_val = '/home/malar/faster_rcnn_1.0/faster-rcnn.pytorch/val_list.txt'
-        filename_imglist_test = '/home/malar/faster_rcnn_1.0/faster-rcnn.pytorch/test_list.txt'
+        filename_imglist_train = '/home/malar/git_sam/Action-Proposal-Networks/faster-rcnn.pytorch/train_list.txt'
+        filename_imglist_val = '/home/malar/git_sam/Action-Proposal-Networks/faster-rcnn.pytorch/val_list.txt'
+        filename_imglist_test = '/home/malar/git_sam/Action-Proposal-Networks/faster-rcnn.pytorch/test_list.txt'
         #prefix = 'img_{:05d}.jpg'
     else:
         raise NotImplementedError('no such modality:' + modality)
