@@ -82,7 +82,7 @@ class _ProposalLayer(nn.Module):
         shift_x, shift_y = np.meshgrid(shift_x, shift_y)
         shifts = torch.from_numpy(np.vstack((shift_x.ravel(), shift_y.ravel(),
                                   shift_x.ravel(), shift_y.ravel())).transpose())
-        shifts = shifts.contiguous().type_as(scores).float()
+        shifts = shifts.contiguous().type_as(scores).float() #every pixel in base feature with 4 coord
 
         A = self._num_anchors
         K = shifts.size(0)

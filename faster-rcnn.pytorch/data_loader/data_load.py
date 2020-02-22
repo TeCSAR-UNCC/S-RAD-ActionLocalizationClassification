@@ -149,7 +149,7 @@ class Action_dataset(data.Dataset):
       #bbox_new=list()
       images = list()
       img_path = list()
-      gt = np.zeros((len(indices),30,44),
+      gt = np.zeros((len(indices),20,44),
                   dtype=np.float32)
       num_boxes = np.zeros((8),dtype=np.float32)
       im_info = np.zeros((8,3),dtype=np.float32)
@@ -165,7 +165,7 @@ class Action_dataset(data.Dataset):
                 for seg_ind in indices: #iterate through every image
                     count = 0
                     
-                    bboxes = np.zeros((30,44),dtype= float)
+                    bboxes = np.zeros((20,44),dtype= float)
                     p = int(seg_ind) + int(frame)
                     #seg_imgs = self._load_image(record.path, '{:06d}.jpg'.format(p))
                     image_path = os.path.join(record.path, '{:06d}.jpg'.format(p))
