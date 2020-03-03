@@ -21,7 +21,7 @@ from torch.autograd import Variable
 import torch.nn as nn
 import torch.optim as optim
 import torchvision
-
+from statistics import mean 
 
 from torch.utils.data.sampler import Sampler
 from data_loader.data_load import Action_dataset
@@ -36,8 +36,17 @@ multiprocessing.set_start_method('spawn', True)
 from model.utils.config import cfg, cfg_from_file, cfg_from_list, get_output_dir
 from model.utils.net_utils import weights_normal_init, save_net, load_net, \
       adjust_learning_rate, save_checkpoint, clip_gradient
+from model.rpn.bbox_transform import clip_boxes
+from model.rpn.proposal_target_layer_cascade import _ProposalTargetLayer
 
+from model.nms.nms import soft_nms,py_cpu_nms
+
+# from model.nms.nms_wrapper import nms
+from model.roi_layers import nms
+from model.rpn.bbox_transform import bbox_transform_inv,bbox_overlaps, bbox_transform_batch
+from data_loader.data_load import activity2id
 from model.faster_rcnn.resnet import resnet
+
 def parse_args():
   """
   Parse input arguments
@@ -207,6 +216,7 @@ def main():
         batch_size=args.batch_size, shuffle=True,
         num_workers=args.num_workers, pin_memory=True,
         drop_last=True)  # prevent something not % n_GPU
+  
   val_loader = torch.utils.data.DataLoader(
         Action_dataset(val_path, args.val_list, num_segments=args.num_segments,
                    modality=args.modality,random_shift=True, test_mode=False,
@@ -215,7 +225,7 @@ def main():
                        ToTorchFormatTensor(div=1),
                        normalize]),dense_sample =False,uniform_sample=False,
                  random_sample = False,strided_sample = False),
-        batch_size=args.batch_size, shuffle=False,
+        batch_size=1, shuffle=False,
         num_workers=args.num_workers, pin_memory=True,
         ) 
   if args.cuda:
@@ -240,13 +250,30 @@ def main():
 
   fasterRCNN.create_architecture()
 
+  lr = cfg.TRAIN.LEARNING_RATE
+  lr = args.lr
+  
+  params = []
+  for key, value in dict(fasterRCNN.named_parameters()).items():
+    if value.requires_grad:
+      if 'bias' in key:
+        params += [{'params':[value],'lr':lr*(cfg.TRAIN.DOUBLE_BIAS + 1), \
+                'weight_decay': cfg.TRAIN.BIAS_DECAY and cfg.TRAIN.WEIGHT_DECAY or 0}]
+      else:
+        params += [{'params':[value],'lr':lr, 'weight_decay': cfg.TRAIN.WEIGHT_DECAY}]
+
   if args.cuda:
     fasterRCNN.cuda()
   
+  #define optimizer
+
+  if args.optimizer == "adam":
+     lr = lr * 0.1
+     optimizer = torch.optim.Adam(params)
+
+  elif args.optimizer == "sgd":
+     optimizer = torch.optim.SGD(params, momentum=cfg.TRAIN.MOMENTUM)
      
-  #get the optimizer 
-  optimizer = args.optimizer
-  lr = args.lr
   ## adding temporal shift pretrained kinetics weights
 
   if args.tune_from:
@@ -312,48 +339,32 @@ def main():
     fasterRCNN = nn.DataParallel(fasterRCNN)
   else:
     mGPUs = False
+  
   train_iters_per_epoch = int(len(train_loader.dataset) / args.batch_size)
   val_iters_per_epoch = int(len(val_loader.dataset) / args.batch_size)
-  folders_util = [args.root_log, args.root_model,
-                    os.path.join(args.root_log, args.store_name),
-                    os.path.join(args.root_model, args.store_name)]
-  for folder in folders_util:
-    if not os.path.exists(folder):
-      print('creating folder ' + folder)
-      os.mkdir(folder)
-
+  
   if args.use_tfboard:
     from tensorboardX import SummaryWriter
     logger = SummaryWriter("logs")
+  
   if args.evaluate:
-    validate(val_loader, fasterRCNN,0,val_iters_per_epoch)
+    validate(val_loader, fasterRCNN,0,val_iters_per_epoch,num_class,args.num_segments)
     #return
   for epoch in range(args.start_epoch, args.max_epochs + 1):
     session = args.session
-    train(train_loader, fasterRCNN,lr,optimizer,epoch,train_iters_per_epoch,session,mGPUs,logger)
-    # evaluate on validation set
-    validate(val_loader, fasterRCNN,epoch,val_iters_per_epoch)
+    if epoch % (args.lr_decay_step + 1) == 0:
+        adjust_learning_rate(optimizer, args.lr_decay_gamma)
+        lr *= args.lr_decay_gamma
 
-    save_name = os.path.join(output_dir, 'faster_rcnn_{}_{}_{}.pth'.format(args.session, epoch, step))
-    save_checkpoint({
-      'session': args.session,
-      'epoch': epoch + 1,
-      'model': fasterRCNN.module.state_dict() if args.mGPUs else fasterRCNN.state_dict(),
-      'optimizer': optimizer.state_dict(),
-      'pooling_mode': cfg.POOLING_MODE,
-      'class_agnostic': args.class_agnostic,
-    }, save_name)
-    print('save model: {}'.format(save_name))
-
+    train(train_loader, fasterRCNN,lr,optimizer,
+    epoch,train_iters_per_epoch,session,mGPUs,logger,output_dir)
     
+    # evaluate on validation set
+    if epoch % 4 == 0:
+      validate(val_loader, fasterRCNN,epoch,val_iters_per_epoch,num_class,args.num_segments)
 
-
-
-def train(train_loader,fasterRCNN,lr,optimizer,epoch,train_iters_per_epoch,session,mGPUs,logger):
-    # setting to train mode
-    fasterRCNN.train()
-    loss = 0
-    loss_temp = 0
+def train(train_loader,fasterRCNN,lr,optimizer,epoch,train_iters_per_epoch,session,mGPUs,logger,output_dir):
+       
     # initilize the tensor holder here.
     im_data = torch.FloatTensor(1)
     im_info = torch.FloatTensor(1)
@@ -372,28 +383,12 @@ def train(train_loader,fasterRCNN,lr,optimizer,epoch,train_iters_per_epoch,sessi
     num_boxes = Variable(num_boxes)
     gt_boxes = Variable(gt_boxes)
 
-    params = []
-    for key, value in dict(fasterRCNN.named_parameters()).items():
-     if value.requires_grad:
-      if 'bias' in key:
-        params += [{'params':[value],'lr':lr*(cfg.TRAIN.DOUBLE_BIAS + 1), \
-                'weight_decay': cfg.TRAIN.BIAS_DECAY and cfg.TRAIN.WEIGHT_DECAY or 0}]
-      else:
-        params += [{'params':[value],'lr':lr, 'weight_decay': cfg.TRAIN.WEIGHT_DECAY}]
-  
-
-    #define optimizer
-
-    if optimizer == "adam":
-     lr = lr * 0.1
-     optimizer = torch.optim.Adam(params)
-
-    elif optimizer == "sgd":
-     optimizer = torch.optim.SGD(params, momentum=cfg.TRAIN.MOMENTUM)
-
-    
+    # setting to train mode
+    fasterRCNN.train()
+    #loss = 0
+    loss_temp = 0
     data_iter = iter(train_loader)
-    for step in range(train_iters_per_epoch):
+    for step in range (train_iters_per_epoch):
         data = next(data_iter)
         
         with torch.no_grad():
@@ -406,7 +401,7 @@ def train(train_loader,fasterRCNN,lr,optimizer,epoch,train_iters_per_epoch,sessi
               channel = im_data.size(2)
               im_data = im_data.view(-1,channel,imgsize1,imgsize2)
               im_info = im_info.view(-1,3)
-              gt_boxes= gt_boxes.view(-1,20,44)
+              gt_boxes= gt_boxes.view(-1,15,44)
               num_boxes = num_boxes.view(-1)
         
         fasterRCNN.zero_grad()
@@ -418,7 +413,7 @@ def train(train_loader,fasterRCNN,lr,optimizer,epoch,train_iters_per_epoch,sessi
          
         loss = rpn_loss_cls.mean() + rpn_loss_box.mean() \
         + RCNN_loss_cls.mean() + RCNN_loss_bbox.mean()
-        # loss_temp += loss.item()
+        loss_temp += loss.item()
          
         # backward
         optimizer.zero_grad()
@@ -429,8 +424,8 @@ def train(train_loader,fasterRCNN,lr,optimizer,epoch,train_iters_per_epoch,sessi
 
         #if step % args.disp_interval == 0:
         # end = time.time()
-        #if step > 0:
-        #  loss_temp /= (args.disp_interval + 1)
+        if step > 0:
+          loss_temp /= (100 + 1)
 
         if mGPUs:
           loss_rpn_cls = rpn_loss_cls.mean().item()
@@ -455,7 +450,7 @@ def train(train_loader,fasterRCNN,lr,optimizer,epoch,train_iters_per_epoch,sessi
                       % (loss_rpn_cls, loss_rpn_box, loss_rcnn_cls, loss_rcnn_box))
         #if args.use_tfboard:
         info = {
-            'loss': loss,
+            'loss': loss_temp,
             'loss_rpn_cls': loss_rpn_cls,
             'loss_rpn_box': loss_rpn_box,
             'loss_rcnn_cls': loss_rcnn_cls,
@@ -464,10 +459,20 @@ def train(train_loader,fasterRCNN,lr,optimizer,epoch,train_iters_per_epoch,sessi
         logger.add_scalars("logs_s_{}/losses".format(session), info, (epoch - 1) * train_iters_per_epoch + step)
         loss_temp = 0
         logger.close()
+    save_name = os.path.join(output_dir, 'faster_rcnn_{}_{}_{}.pth'.format(session, epoch, step))
+    save_checkpoint({
+      'session': session,
+      'epoch': epoch + 1,
+      'model': fasterRCNN.module.state_dict() if mGPUs else fasterRCNN.state_dict(),
+      'optimizer': optimizer.state_dict(),
+      'pooling_mode': cfg.POOLING_MODE,
+      #'class_agnostic': args.class_agnostic,
+    }, save_name)
+    print('save model: {}'.format(save_name))
         
 
-def validate(val_loader,fasterRCNN,epoch,val_iters_per_epoch):
-    fasterRCNN.eval()
+def validate(val_loader,fasterRCNN,epoch,val_iters_per_epoch,num_class,num_segments):
+    
     # initilize the tensor holder here.
     im_data = torch.FloatTensor(1)
     im_info = torch.FloatTensor(1)
@@ -487,6 +492,11 @@ def validate(val_loader,fasterRCNN,epoch,val_iters_per_epoch):
     num_boxes = Variable(num_boxes)
     gt_boxes = Variable(gt_boxes)
     data_iter = iter(val_loader)
+
+    fasterRCNN.eval()
+    final_score,tp,fp ,ap= [],[],[],[]
+    num_gt = 0
+    true_positive,false_positive = [],[]
     for step in range(val_iters_per_epoch):
       data = next(data_iter)
       with torch.no_grad():
@@ -499,23 +509,249 @@ def validate(val_loader,fasterRCNN,epoch,val_iters_per_epoch):
               channel = im_data.size(2)
               im_data = im_data.view(-1,channel,imgsize1,imgsize2)
               im_info = im_info.view(-1,3)
-              gt_boxes= gt_boxes.view(-1,20,44)
+              gt_boxes= gt_boxes.view(-1,15,44)
               num_boxes = num_boxes.view(-1)
       rois, cls_prob, bbox_pred, \
       rpn_loss_cls, rpn_loss_box, \
       RCNN_loss_cls, RCNN_loss_bbox, \
       rois_label = fasterRCNN(im_data, im_info, gt_boxes, num_boxes)
-     
+      
+      #get the rois label to index out the single bbox pred
+      RCNN_proposal_target = _ProposalTargetLayer(num_class)
+      rois_label = RCNN_proposal_target(rois, gt_boxes, num_boxes,val =1)
+      #roi_data= roi_data.cpu().numpy()
+      rois_label = rois_label.view(-1,40)
+
       #calculate the scores and boxes
       scores = cls_prob.data
-      for j in range(1, num_class):
-          inds = torch.nonzero(scores[frame,:,j]).view(-1)
-          # if there is det
-          if inds.numel() > 0:
-            cls_scores = scores[frame,:,j][inds]
-            _, order = torch.sort(cls_scores, 0, True)
       boxes = rois.data[:, :, 1:5]
-      boxes = boxes.view(-1, 4).expand(1,-1,4).contiguous()
+      batch_size = rois.shape[0]
+      box_deltas = bbox_pred.data
+      box_deltas = box_deltas.view(-1, 4) * torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_STDS).cuda() \
+                           + torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_MEANS).cuda()
+      box_deltas = box_deltas.view(batch_size, -1, 4 * num_class)
+      pred_boxes = bbox_transform_inv(boxes, box_deltas, 8)
+      pred_boxes = clip_boxes(pred_boxes, im_info.data, 8)   
+
+      #convert the prediction boxes and gt_boxes to the image size
+      gtbb = gt_boxes[:,:,0:4]
+      gtlabels = gt_boxes[:,:,4:]
+      pred_boxes /= data[3][0][1][2].item()
+      gtbb /= data[3][0][1][2].item()
+
+      #move the items to cpu to save GPU memory
+      rois_label = rois_label.cpu().numpy()
+      proposal_num,class_num = np.nonzero(rois_label)
+      
+      pred_boxes = pred_boxes.cpu().numpy()
+      gtbb = gtbb.cpu().numpy()
+      gtlabels = gtlabels.cpu().numpy()
+      scores = scores.cpu().numpy()
+      #code to get single bbox detection from the 40 bbox detections for a single proposal
+      pbox = pred_boxes.reshape(-1,pred_boxes.shape[2])
+      bbox_pred_view = pbox.reshape(pbox.shape[0], int(pbox.shape[1] / 4), 4)
+      bbox_pred_select = np.zeros((pbox.shape[0], 1, 4),dtype = float)
+            
+      for i in range (proposal_num.shape[0]):
+                dup = np.argwhere(proposal_num == proposal_num[i])
+                if (len(dup)) != 1:
+                   bbox_pred_select[proposal_num[i]] = bbox_pred_view[proposal_num[i],class_num[dup],:].mean(0)
+                    
+                else:
+                   bbox_pred_select[proposal_num[i]] = bbox_pred_view[proposal_num[i],class_num[i],:]
+      bbox_pred = bbox_pred_select.squeeze(1)
+
+      #calculate the scores ,tp,fp labels for the final proposals
+      metrics = calc_proposal_after_nms(bbox_pred,scores,gtbb,num_class,gtlabels)
+      fscore,tp1,fp1,gt = metrics
+      num_gt += gt
+      final_score.append(fscore)
+      tp.extend(tp1)
+      fp.extend(fp1)
+    print(f"completed calculating tp/fp labels for step: {step}")
     
+    #calculate precision for i'th class
+    for i in range(num_class-1): #starts from 0 indices till 39
+      s = []
+      for video in range(val_iters_per_epoch):
+       imd_score = final_score[video][:,i]
+       s.extend(imd_score)
+      ap += precision_recall(tp,fp, s, num_gt )
+      for key, v in activity2id.items():
+        if v == i :
+          print(f"Class '{i}' ({key}) - AveragePrecision: {ap[i]}")
+    print(f"mAP for epoch [{epoch}]: {mean(ap)}")
+
+
+def calc_proposal_after_nms (pred_boxes,scores,boxes,num_class,labels):
+
+  #take the non-.zero gt boxes and gt labels
+  index=np.unique(np.nonzero(boxes)[1])
+  gtbox = boxes[:,index,:]
+  gtlabel = labels[:,index,:]
+  num_gt = gtbox.shape[0]*gtbox.shape[1]
+  score = scores.reshape(-1,40)
+  pred_box = pred_boxes.reshape(-1,4)
+  
+  #apply nms to remove the extra proposals
+  keep = py_cpu_nms(pred_box,score, 0.3)
+  pred_box_after_nms = pred_box[keep,:]
+  score_afer_nms = score[keep]       
+  (score, tp_labels,fp_labels,num_gt) = compute_tp_fp(pred_box_after_nms,score_afer_nms,
+                                                                  gtbox,gtlabel)
+  
+  return score,tp_labels,fp_labels,num_gt
+          
+def precision_recall(tp_labels,fp_labels,scores,num_gt):
+  ap, p, r = [], [], []
+
+  scores = np.asarray(scores)
+  index = np.argsort(-scores)
+  
+  scores= scores[index]
+
+  fp_labels = np.asarray(fp_labels)
+  fp_labels = fp_labels[index]
+  tp_labels = np.asarray(tp_labels)
+  tp_labels = tp_labels[index]
+  #if tp_labels == 0 and n_gt == 0:
+  #  continue
+  if np.sum(tp_labels) == 0 or num_gt == 0:
+            ap.append(0)
+            r.append(0)
+            p.append(0)
+  else:
+   
+   fpc = fp_labels.cumsum()
+   tpc = tp_labels.cumsum()
+
+   precision = tpc.astype(float) / (
+        tpc + fpc + 0.00001
+    )
+   p.append(precision)
+   recall = tpc.astype(float) / num_gt
+   r.append(recall)
+   ap.append(compute_ap(recall, precision))
+  #print("Both positives and gt are zero")
+  return ap
+
+def compute_ap(recall, precision):
+    """ Compute the average precision, given the recall and precision curves.
+    Code originally from https://github.com/rbgirshick/py-faster-rcnn.
+    # Arguments
+        recall:    The recall curve (list).
+        precision: The precision curve (list).
+    # Returns
+        The average precision as computed in py-faster-rcnn.
+    """
+    # correct AP calculation
+    # first append sentinel values at the end
+    mrec = np.concatenate(([0.0], recall, [1.0]))
+    mpre = np.concatenate(([0.0], precision, [0.0]))
+
+    # compute the precision envelope
+    for i in range(mpre.size - 1, 0, -1):
+        mpre[i - 1] = np.maximum(mpre[i - 1], mpre[i])
+
+    # to calculate area under PR curve, look for points
+    # where X axis (recall) changes value
+    i = np.where(mrec[1:] != mrec[:-1])[0]
+
+    # and sum (\Delta recall) * prec
+    ap = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])
+    return ap
+
+          
+def compute_tp_fp(detected_boxes_at_ith_class,detected_scores_at_ith_class,
+                                    box,label):
+     
+     gtbox = box.reshape(-1,4)
+     gtlabel=label.reshape(-1,40)
+     #detected_boxes_at_ith_class = detected_boxes_at_ith_class.view(-1,4)
+     #detected_scores_at_ith_class = detected_scores_at_ith_class.view(-1,40)
+     
+     #compute IOU between predicted proposal and gt box
+     overlaps = cpu_bbox_overlaps(detected_boxes_at_ith_class, gtbox)
+     num_proposal = detected_boxes_at_ith_class.shape[0]
+     num_boxes_per_img = gtbox.shape[0]
+     
+     # initilaise the tp,fp labels 
+     tp_labels = np.zeros(num_proposal)
+     fp_labels = np.zeros(num_proposal)
+     is_gt_detected =[] 
+     is_proposal_labeled =[]
+
+     #calculate the tp,fp labels for each proposal and keep count of gt and detections match
+     if (num_proposal>0) and (num_boxes_per_img !=0):
+            match_table = np.zeros((num_proposal,num_boxes_per_img),dtype=float)
+            for p in range(num_proposal):
+                for g in range(num_boxes_per_img):
+                    if overlaps[p,g] >= 0.5:
+                        match_table[p,g] = overlaps[p,g]
+                    
+            best_match = match_table.max()
+            while best_match >= 0.5:
+                match_pos = np.where(match_table == best_match)
+                p = match_pos[0][0]
+                detect_label = detected_scores_at_ith_class[p,:]
+                detect_pos = np.argwhere(detect_label > 0.6)
+                g = match_pos[1][0]
+                gt_label = gtlabel[g,:]
+                gt_pos = np.argwhere(gt_label ==1 )
+                is_gt_detected += [g]
+                is_proposal_labeled+=[p]
+                if len(gt_pos) == len(detect_pos) and np.equal(gt_pos,detect_pos).all():
+                  tp_labels[p] = 1
+                else:
+                  fp_labels[p] = 1
+                match_table[p,:] = np.zeros(match_table[p,:].shape)
+                match_table[:,g] = np.zeros(match_table[:,g].shape)
+
+                best_match = match_table.max()
+     
+     #count the left out proposals as fp      
+     for i in range(num_proposal): 
+        if i not in is_proposal_labeled:
+          fp_labels[i] = 1
+
+
+     
+     tp_labels = tp_labels.reshape(-1)
+     fp_labels = fp_labels.reshape(-1)
+     return detected_scores_at_ith_class,tp_labels,fp_labels,num_boxes_per_img
+def cpu_bbox_overlaps(anchors, gt_boxes):
+    """
+    anchors: (N, 4) ndarray of float
+    gt_boxes: (K, 4) ndarray of float
+
+    overlaps: (N, K) ndarray of overlap between boxes and query_boxes
+    """
+    N = anchors.shape[0]
+    K = gt_boxes.shape[0]
+
+    gt_boxes_area = ((gt_boxes[:,2] - gt_boxes[:,0] + 1) *
+                (gt_boxes[:,3] - gt_boxes[:,1] + 1)).reshape(1, K)
+
+    anchors_area = ((anchors[:,2] - anchors[:,0] + 1) *
+                (anchors[:,3] - anchors[:,1] + 1)).reshape(N, 1)
+
+    boxes = np.expand_dims(anchors,axis = 1)
+    boxes = np.tile(boxes,(K,1))
+    query_boxes = np.expand_dims(gt_boxes,axis=0)
+    query_boxes = np.tile(query_boxes,(N,1,1))
+
+    iw = (np.minimum(boxes[:,:,2], query_boxes[:,:,2]) -
+        np.maximum(boxes[:,:,0], query_boxes[:,:,0]) + 1)
+    iw[iw < 0] = 0
+
+    ih = (np.minimum(boxes[:,:,3], query_boxes[:,:,3]) -
+        np.maximum(boxes[:,:,1], query_boxes[:,:,1]) + 1)
+    ih[ih < 0] = 0
+
+    ua = anchors_area + gt_boxes_area - (iw * ih)
+    overlaps = iw * ih / ua
+
+    return overlaps
+     
 if __name__ == '__main__':
    main()    
