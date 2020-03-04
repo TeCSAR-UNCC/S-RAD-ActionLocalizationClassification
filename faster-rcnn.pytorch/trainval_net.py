@@ -112,6 +112,12 @@ def parse_args():
   parser.add_argument('--num_segments', type=int, default=3)
   parser.add_argument('--dense_sample', default=False, action="store_true", 
   help='use dense sample for video dataset')
+  parser.add_argument('--uniform_sample', default=False, action="store_true", 
+  help='use dense sample for video dataset')
+  parser.add_argument('--random_sample', default=False, action="store_true", 
+  help='use dense sample for video dataset')
+  parser.add_argument('--strided_sample', default=False, action="store_true", 
+  help='use dense sample for video dataset')
 
 # config optimization
   parser.add_argument('--o', dest='optimizer',
@@ -191,7 +197,6 @@ def main():
   
   # train set
   # -- Note: Use validation set and disable the flipped to enable faster loading.
-  #cfg.TRAIN.USE_FLIPPED = True
   cfg.USE_GPU_NMS = args.cuda
 
   output_dir = args.save_dir + "/" + args.net + "/" + args.dataset
@@ -199,7 +204,6 @@ def main():
           os.makedirs(output_dir)
 
   #dataloader
-  #train_augmentation = fasterRCNN.get_augmentation(flip=False if 'something' in args.dataset or 'jester' in args.dataset else True)
   input_size =600
   input_mean = [0.485, 0.456, 0.406]
   input_std = [0.229, 0.224, 0.225]
@@ -211,8 +215,8 @@ def main():
                    input_size = input_size,
                    transform=torchvision.transforms.Compose([ 
                        ToTorchFormatTensor(div=1),
-                       normalize]),dense_sample =False,uniform_sample=False,
-                 random_sample = False,strided_sample = False),
+                       normalize]),dense_sample =args.dense_sample,uniform_sample=args.uniform_sample,
+                 random_sample = args.random_sample,strided_sample = args.strided_sample),
         batch_size=args.batch_size, shuffle=True,
         num_workers=args.num_workers, pin_memory=True,
         drop_last=True)  # prevent something not % n_GPU
@@ -223,8 +227,8 @@ def main():
                    input_size = input_size,
                    transform=torchvision.transforms.Compose([ 
                        ToTorchFormatTensor(div=1),
-                       normalize]),dense_sample =False,uniform_sample=False,
-                 random_sample = False,strided_sample = False),
+                       normalize]),dense_sample =args.dense_sample,uniform_sample=args.uniform_sample,
+                 random_sample = args.random_sample,strided_sample = args.strided_sample),
         batch_size=1, shuffle=False,
         num_workers=args.num_workers, pin_memory=True,
         ) 
@@ -341,7 +345,7 @@ def main():
     mGPUs = False
   
   train_iters_per_epoch = int(len(train_loader.dataset) / args.batch_size)
-  val_iters_per_epoch = int(len(val_loader.dataset) / args.batch_size)
+  val_iters_per_epoch = int(len(val_loader.dataset))
   
   if args.use_tfboard:
     from tensorboardX import SummaryWriter

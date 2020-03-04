@@ -1,11 +1,18 @@
 import os
 
+'''code to create the dataset list file 
+ Format: 
+       /path_to_frames/ num_of_frames 
+'''
+
 def main():
 
-    #/mnt/AI_RAID/VIRAT/actev-data-repo/dataset/train/VIRAT_S_000001
+    #modify this if only train list or val list to be created
     train =1
     val=1
     test =1
+
+    #set the path to the split files to create the train/val/test list files
     HOME_DIR = '/mnt/AI_RAID/VIRAT/actev-data-repo/dataset'
     train_list_file='/mnt/AI_RAID/VIRAT/actev-data-repo/data_splits/train.lst'
     val_list_file='/mnt/AI_RAID/VIRAT/actev-data-repo/data_splits/val.lst'
@@ -15,6 +22,7 @@ def main():
     test_videonames = [x.strip() for x in open(test_list_file)]
 
     sequence_path = []
+    #local variable to keep count 
     count = 0
     count1 = 0
     count2 = 0
@@ -22,7 +30,6 @@ def main():
     if train:
         TRAIN_DIR = os.path.join(HOME_DIR,'train')
         with open('train_list.txt', 'w') as f:
-            #for x in range(1):
             for x in range(len(train_videonames)):
                 count =0          
                 train_video_path=(os.path.join(TRAIN_DIR,train_videonames[x]))
@@ -80,10 +87,7 @@ def main():
                 for item in test_dirs:
                     f.write("%s %s\n" % (item,num_frames[count2]))
                     count2 = count2+1
-            
-                
-        
-    print("x")
+
 if __name__ == '__main__':
     
     main()

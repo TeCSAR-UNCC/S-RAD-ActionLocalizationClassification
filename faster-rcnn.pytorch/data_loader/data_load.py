@@ -76,8 +76,8 @@ class Action_dataset(data.Dataset):
     def __init__(self, train_path,list_file,
                  num_segments=3, modality='RGB',
                  transform=None,random_shift=True, test_mode=False,
-                 dense_sample =False,uniform_sample=False,
-                 random_sample = False,strided_sample = False, input_size = 600):
+                 dense_sample=False,uniform_sample=True,
+                 random_sample=False,strided_sample=False, input_size = 600):
                  
         self.train_path = train_path
         self.list_file = list_file
@@ -87,19 +87,16 @@ class Action_dataset(data.Dataset):
         self.random_shift = random_shift
         self.test_mode = test_mode
         self.new_size = input_size
-        #self.dense_sample = dense_sample
-        self.dense_sample = False
-        self.uniform_sample = True
-        self.strided_sample = False
-        self.random_sample = False
+        self.dense_sample = dense_sample
+        self.uniform_sample = uniform_sample
+        self.strided_sample = strided_sample
+        self.random_sample = random_sample
         self._parse_list()
 
     def _parse_list(self):
         frame_path = [x.strip().split(' ') for x in open(self.list_file)]  
         self.video_list = [VideoRecord(item) for item in frame_path]
         print('Sequence number/ video number:%d' % (len(self.video_list)))
-#        for i in range(len(self.video_list)):
-#            self.getitem(i)
 
     def _sample_indices(self, record):
         """
@@ -141,19 +138,15 @@ class Action_dataset(data.Dataset):
     
     def get(self,index,record, indices,new_size):
       
-      #sequence_path=list()
-      #train_file = '/mnt/AI_RAID/VIRAT/actev-data-repo/dataset/train/train_list.txt'
       sequence_path = str(record.path).strip().split('/frames/')[0]
       label = list()
       bbox = list()
-      #bbox_new=list()
       images = list()
       img_path = list()
       gt = np.zeros((len(indices),15,44),
                   dtype=np.float32)
       num_boxes = np.zeros((8),dtype=np.float32)
       im_info = np.zeros((8,3),dtype=np.float32)
-      #for path in range(len(sequence_path)): #sequence level for loop 
       npy_file = (os.path.join(str(sequence_path),'ground_truth.npy'))
       data = np.load(npy_file)
           
@@ -167,7 +160,6 @@ class Action_dataset(data.Dataset):
                     
                     bboxes = np.zeros((15,44),dtype= float)
                     p = int(seg_ind) + int(frame)
-                    #seg_imgs = self._load_image(record.path, '{:06d}.jpg'.format(p))
                     image_path = os.path.join(record.path, '{:06d}.jpg'.format(p))
                     im = imread(image_path)
                     im = im[:,:,::-1]
@@ -175,7 +167,6 @@ class Action_dataset(data.Dataset):
                     height,width,_= im.shape #h=1080,w=1920
                     im_size_min= min(height,width)
                     im_size_max = max(height,width)
-                    #new_w = float(im_size_max * new_size) / im_size_min
                     im_scale = float(new_size) / float(im_size_min)
                     im = cv2.resize(im, None, None, fx=im_scale, fy=im_scale,
                     interpolation=cv2.INTER_LINEAR)
@@ -185,14 +176,7 @@ class Action_dataset(data.Dataset):
                         if i[0] == p:
                             bbox_new =[]
                             bbox = (i[2:6])*im_scale
-                            #y1,x1,y2,x2=bbox
                             bbox_new[0:4] = bbox
-                            #differ=new_y2 - new_y1
-                            #diff.append(differ)
-                            #label=(i[6:]).tolist()
-                            #bbox_new+=label
-                            #bboxes+=[bbox_new]
-                            #bbox_new[4:44]=label
                             bbox_new[4:]=i[6:]
                             bboxes[count,:]+=bbox_new
                             count+=1
@@ -214,45 +198,7 @@ class Action_dataset(data.Dataset):
       process_data = self.transform(blob)
       return process_data, gt, num_boxes , im_info ,img_path
 
-      ''''for y in range(len(data["annotations"][seg_ind]['actions'])):#get the bbox in that frame
-                key,value = data["annotations"][seg_ind]['actions'][y].items()
-                
-                for i in range(len(key[1])):
-                    act_classid = activity2id[value[1]]
-                    label=(act_classid)
-                    #label.append(value[1])
-                    out = key[1]
-                    k,v = out[i].items()
-                    bbox=(v[1][:4])     #somehow annotation is wrong here
-                    x1,y1,x2,y2=bbox
-                    new_x1= round(x1/height * new_size)
-                    new_x2= round(x2/height * new_size)
-                    new_y1= round(x1/width * new_size)
-                    new_y2= round(x2/width * new_size)
-                    bbox_new = (new_x1,new_y1,new_x2,new_y2)
-                    assert(i < new_size for i in bbox_new)
-                    #j = str(j)
-                    #bbox = [j.split('[', 1)[1].split(']')[0]]
-                    #bbox.append(split_results)
-                    #bbox = [split_results]
-                    bbox_new+=(label)
-
-                    bboxes+=[bbox_new]
-            gt += [bboxes]       
-            #gt.update({count : [label,bbox]})
-            #count+=1
-            images.extend(seg_imgs)
-      process_data = self.transform(images)
-      #code to unroll the channel dimensrion to batch,channels
-      process_data= np.array_split(process_data,8,axis =0)
-      data = []
-      dat = []
-      for i in process_data:
-        data = np.expand_dims(i, axis=0)
-        dat += [data]
-      image = np.concatenate(dat,axis=0)
-      return image, gt'''
-                    
+                          
     def __getitem__(self, index):
         record = self.video_list[index]
         #self.yaml_file(index)
