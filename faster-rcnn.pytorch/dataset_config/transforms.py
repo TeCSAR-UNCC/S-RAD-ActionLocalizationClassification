@@ -1,3 +1,9 @@
+# Code from "TSM: Temporal Shift Module for Efficient Video Understanding"
+# arXiv:1811.08383
+# Ji Lin*, Chuang Gan, Song Han
+# {jilin, songhan}@mit.edu, ganchuang@csail.mit.edu
+
+
 import torchvision
 import random
 from PIL import Image, ImageOps
