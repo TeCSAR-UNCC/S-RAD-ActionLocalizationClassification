@@ -1,5 +1,5 @@
 # --------------------------------------------------------
-# Pytorch multi-GPU Faster R-CNN
+# Pytorch Multi-GPU Faster R-CNN
 # Licensed under The MIT License [see LICENSE for details]
 # Written by Jiasen Lu, Jianwei Yang, based on code from Ross Girshick
 # --------------------------------------------------------
@@ -15,37 +15,33 @@ import argparse
 import pprint
 import pdb
 import time
+
 import cv2
+
+from data_loader.data_load import Action_dataset
+from data_loader.data_load import *
+from dataset_config import dataset
+from dataset_config.transforms import *
 
 import torch
 from torch.autograd import Variable
 import torch.nn as nn
 import torch.optim as optim
-import torchvision
-from statistics import mean 
+import pickle
+from model.utils.config import cfg, cfg_from_file, cfg_from_list, get_output_dir
+from model.rpn.bbox_transform import clip_boxes
+from model.nms.nms import soft_nms,py_cpu_nms
+from model.rpn.bbox_transform import bbox_transform_inv,cpu_bbox_overlaps_batch
+from model.utils.net_utils import save_net, load_net, precision_recall, \
+        compute_ap,vis_detections,gt_visuals
+from model.faster_rcnn.resnet import resnet
 
-from torch.utils.data.sampler import Sampler
-from data_loader.data_load import Action_dataset
-from dataset_config import dataset
-from dataset_config.transforms import *
-from tensorboardX import SummaryWriter
+from model.rpn.proposal_target_layer_cascade import _ProposalTargetLayer
 
 import multiprocessing
 multiprocessing.set_start_method('spawn', True)
-from model.utils.config import cfg, cfg_from_file, cfg_from_list, get_output_dir
-from model.utils.net_utils import weights_normal_init, save_net, load_net, \
-      adjust_learning_rate, save_checkpoint, clip_gradient,precision_recall, \
-        compute_ap,vis_detections,gt_visuals
-from model.rpn.proposal_target_layer_cascade import _ProposalTargetLayer
 
-from model.nms.nms import soft_nms,py_cpu_nms
 
-from model.roi_layers import nms
-from model.rpn.bbox_transform import bbox_transform_inv,cpu_bbox_overlaps_batch, \
-          bbox_transform_batch,cpu_bbox_overlaps,clip_boxes
-
-from data_loader.data_load import activity2id
-from model.faster_rcnn.resnet import resnet
 
 def parse_args():
   """
@@ -87,11 +83,14 @@ def parse_args():
   parser.add_argument('--bs', dest='batch_size',
                       help='batch_size',
                       default=1, type=int)
-  parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
-                    help='evaluate model on validation set')
+  parser.add_argument('--load_dir', dest='load_dir',
+                      help='directory to load models', default="models",
+                      type=str)
   parser.add_argument('--cag', dest='class_agnostic',
                       help='whether perform class_agnostic bbox regression',
                       action='store_true')
+
+
 
 #temporal shift module
   parser.add_argument('--shift', default=False, action="store_true", help='use shift for models')
@@ -168,21 +167,24 @@ def parse_args():
   args = parser.parse_args()
   return args
 
+lr = cfg.TRAIN.LEARNING_RATE
+momentum = cfg.TRAIN.MOMENTUM
+weight_decay = cfg.TRAIN.WEIGHT_DECAY
+
 def main():
+
   args = parse_args()
+
   print('Called with args:')
   print(args)
 
+  if torch.cuda.is_available() and not args.cuda:
+    print("WARNING: You have a CUDA device, so you should probably run with --cuda")
+
+  np.random.seed(cfg.RNG_SEED)
   if args.dataset == "virat":args.set_cfgs = ['ANCHOR_SCALES', '[1, 2, 3]', 'ANCHOR_RATIOS', 
       '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '20']
 
-  args.store_name = '_'.join(
-        ['Action_proposal', args.dataset, args.modality, args.net, 'segment%d' % args.num_segments,
-         'e{}'.format(args.max_epochs)])
-  if args.pretrain != 'imagenet':
-        args.store_name += '_{}'.format(args.pretrain)
-  print('storing name: ' + args.store_name)
-  
   num_class, args.train_list, args.val_list,args.test_list, train_path, val_path, test_path= dataset.return_dataset(args.dataset,args.modality)
   args.cfg_file = "cfgs/{}_ls.yml".format(args.net) if args.large_scale else "/home/malar/git_sam/Action-Proposal-Networks/faster-rcnn.pytorch/cfgs/{}.yml".format(args.net)
 
@@ -193,326 +195,94 @@ def main():
 
   print('Using config:')
   pprint.pprint(cfg)
-  np.random.seed(cfg.RNG_SEED)
 
-  #torch.backends.cudnn.benchmark = True
-  if torch.cuda.is_available() and not args.cuda:
-    print("WARNING: You have a CUDA device, so you should probably run with --cuda")
-  
-  # train set
-  # -- Note: Use validation set and disable the flipped to enable faster loading.
-  cfg.USE_GPU_NMS = args.cuda
+  input_dir = args.load_dir + "/" + args.net + "/" + args.dataset
+  if not os.path.exists(input_dir):
+    raise Exception('There is no input directory for loading network from ' + input_dir)
+  load_name = os.path.join(input_dir,
+    'faster_rcnn_{}_{}_{}.pth'.format(args.checksession, args.checkepoch, args.checkpoint))
 
-  output_dir = args.save_dir + "/" + args.net + "/" + args.dataset
-  if not os.path.exists(output_dir):
-          os.makedirs(output_dir)
+  # initilize the network here.
+  if args.net == 'vgg16':
+    fasterRCNN = vgg16(imdb.classes, pretrained=False, class_agnostic=args.class_agnostic)
+  elif args.net == 'res101':
+    fasterRCNN = resnet(imdb.classes, 101, pretrained=False, class_agnostic=args.class_agnostic)
+  elif args.net == 'res50':
+    #fasterRCNN = resnet(imdb.classes, 50, pretrained=False, class_agnostic=args.class_agnostic)
+    fasterRCNN = resnet(num_class,modality = 'RGB',num_layers =50, base_model ='resnet50', n_segments =8,
+               n_div =args.shift_div , place = args.shift_place,temporal_pool = args.temporal_pool,
+               pretrain = args.pretrain,shift = args.shift,
+               class_agnostic=args.class_agnostic)
   
-  #visualisation 
-  vis = args.vis
-  #dataloader
+  elif args.net == 'res152':
+    fasterRCNN = resnet(imdb.classes, 152, pretrained=False, class_agnostic=args.class_agnostic)
+  else:
+    print("network is not defined")
+    pdb.set_trace()
+
+  fasterRCNN.create_architecture()
+
+  print("load checkpoint %s" % (load_name))
+  checkpoint = torch.load(load_name)
+  fasterRCNN.load_state_dict(checkpoint['model'])
+  
+  if 'pooling_mode' in checkpoint.keys():
+    cfg.POOLING_MODE = checkpoint['pooling_mode']
+
+
+  print('load model successfully!')
+  # initilize the tensor holder here.
+  im_data = torch.FloatTensor(1)
+  im_info = torch.FloatTensor(1)
+  num_boxes = torch.LongTensor(1)
+  gt_boxes = torch.FloatTensor(1)
+
+
+  # ship to cuda
+  if args.cuda:
+    im_data = im_data.cuda()
+    im_info = im_info.cuda()
+    num_boxes = num_boxes.cuda()
+    gt_boxes = gt_boxes.cuda()
+
+  # make variable
+  im_data = Variable(im_data)
+  im_info = Variable(im_info)
+  num_boxes = Variable(num_boxes)
+  gt_boxes = Variable(gt_boxes)
+
+  if args.cuda:
+    cfg.CUDA = True
+
+  if args.cuda:
+    fasterRCNN.cuda()
+
   input_size =600
   input_mean = [0.485, 0.456, 0.406]
   input_std = [0.229, 0.224, 0.225]
   normalize = GroupNormalize(input_mean, input_std)
-
-  train_loader = torch.utils.data.DataLoader(
-        Action_dataset(train_path, args.train_list, num_segments=args.num_segments,
-                   modality=args.modality,random_shift=True, test_mode=False,
+  test_loader = torch.utils.data.DataLoader(
+        Action_dataset(test_path, args.test_list, num_segments=args.num_segments,
+                   modality=args.modality,random_shift=False, test_mode=True,
                    input_size = input_size,
                    transform=torchvision.transforms.Compose([ 
                        ToTorchFormatTensor(div=1),
-                       normalize]),dense_sample =args.dense_sample,uniform_sample=args.uniform_sample,
-                 random_sample = args.random_sample,strided_sample = args.strided_sample),
-        batch_size=args.batch_size, shuffle=True,
-        num_workers=args.num_workers, pin_memory=True,
-        drop_last=True)  # prevent something not % n_GPU
-  
-  val_loader = torch.utils.data.DataLoader(
-        Action_dataset(val_path, args.val_list, num_segments=args.num_segments,
-                   modality=args.modality,random_shift=True, test_mode=False,
-                   input_size = input_size,
-                   transform=torchvision.transforms.Compose([ 
-                       ToTorchFormatTensor(div=1),
-                       normalize]),dense_sample =args.dense_sample,uniform_sample=args.uniform_sample,
-                 random_sample = args.random_sample,strided_sample = args.strided_sample),
+                       normalize]),dense_sample =False,uniform_sample=False,
+                 random_sample = False,strided_sample = False),
         batch_size=1, shuffle=False,
-        num_workers=args.num_workers, pin_memory=True) 
-  if args.cuda:
-    cfg.CUDA = True
+        num_workers=0, pin_memory=True,
+        drop_last=True)
 
-# initilize the network here.
-  if args.net == 'vgg16':
-   fasterRCNN = vgg16(imdb.classes, pretrained=True, class_agnostic=args.class_agnostic)  
-  elif args.net == 'res101':
-   fasterRCNN = resnet(imdb.classes, 101,modality=args.modality ,pretrained=True, class_agnostic=args.class_agnostic)
-  elif args.net == 'res50':
-   base_model ='resnet50'
-   fasterRCNN = resnet(num_class,modality = 'RGB',num_layers =50, base_model ='resnet50', n_segments =8,
-               n_div =args.shift_div , place = args.shift_place,temporal_pool = args.temporal_pool,
-               pretrain = args.pretrain,shift = args.shift,
-               class_agnostic=args.class_agnostic)
-  elif args.net == 'res152':
-   fasterRCNN = resnet(imdb.classes, 152, pretrained=True, class_agnostic=args.class_agnostic)
-  else:
-   print("network is not defined")
-   pdb.set_trace()
-
-  fasterRCNN.create_architecture()
-
-  lr = cfg.TRAIN.LEARNING_RATE
-  lr = args.lr
+  save_name = 'faster_rcnn_10'
+  num_sequence = len(test_loader)
   
-  params = []
-  for key, value in dict(fasterRCNN.named_parameters()).items():
-    if value.requires_grad:
-      if 'bias' in key:
-        params += [{'params':[value],'lr':lr*(cfg.TRAIN.DOUBLE_BIAS + 1), \
-                'weight_decay': cfg.TRAIN.BIAS_DECAY and cfg.TRAIN.WEIGHT_DECAY or 0}]
-      else:
-        params += [{'params':[value],'lr':lr, 'weight_decay': cfg.TRAIN.WEIGHT_DECAY}]
-
-  if args.cuda:
-    fasterRCNN.cuda()
-  
-  #define optimizer
-
-  if args.optimizer == "adam":
-     lr = lr * 0.1
-     optimizer = torch.optim.Adam(params)
-
-  elif args.optimizer == "sgd":
-     optimizer = torch.optim.SGD(params, momentum=cfg.TRAIN.MOMENTUM)
-     
-  ## adding temporal shift pretrained kinetics weights
-
-  if args.tune_from:
-        print(("=> fine-tuning from '{}'".format(args.tune_from)))
-        sd = torch.load(args.tune_from)
-        sd = sd['state_dict']
-        model_dict = fasterRCNN.state_dict()
-        replace_dict = []
-        for k, v in sd.items():
-            if k not in model_dict:
-                replace_dict.append((k.replace('module.base_model.conv1',
-                'RCNN_base.0').replace('module.base_model.bn1','RCNN_base.1')
-                .replace('module.base_model.layer1.0','RCNN_base.4.0')
-                .replace('module.base_model.layer1.1','RCNN_base.4.1')
-                .replace('module.base_model.layer1.2','RCNN_base.4.2')
-                .replace('module.base_model.layer2.0','RCNN_base.5.0')
-                .replace('module.base_model.layer2.1','RCNN_base.5.1')
-                .replace('module.base_model.layer2.2','RCNN_base.5.2')
-                .replace('module.base_model.layer2.3','RCNN_base.5.3')
-                .replace('module.base_model.layer3.0','RCNN_base.6.0')
-                .replace('module.base_model.layer3.1','RCNN_base.6.1')
-                .replace('module.base_model.layer3.2','RCNN_base.6.2')
-                .replace('module.base_model.layer3.3','RCNN_base.6.3')
-                .replace('module.base_model.layer3.4','RCNN_base.6.4')
-                .replace('module.base_model.layer3.5','RCNN_base.6.5')
-                .replace('module.base_model.layer4.0.conv1.net.weight','RCNN_top.0.0.conv1.weight')
-                .replace('module.base_model.layer4.1.conv1.net','RCNN_top.0.1.conv1')
-                .replace('module.base_model.layer4.2.conv1.net','RCNN_top.0.2.conv1')
-                .replace('module.base_model.layer4.0.','RCNN_top.0.0.')
-                .replace('module.base_model.layer4.1','RCNN_top.0.1')
-                .replace('module.base_model.layer4.2','RCNN_top.0.2'),k))
-                 
-        for k_new, k in replace_dict:
-            sd[k_new] = sd.pop(k)
-        keys1 = set(list(sd.keys()))
-        keys2 = set(list(model_dict.keys()))
-        set_diff = (keys1 - keys2) | (keys2 - keys1)
-        print('#### Notice: keys that failed to load: {}'.format(set_diff))
-        if args.dataset not in args.tune_from:  # new dataset
-            print('=> New dataset, do not load fc weights')
-            sd = {k: v for k, v in sd.items() if 'fc' not in k}
-      
-        model_dict.update(sd)
-        fasterRCNN.load_state_dict(model_dict)
-
-  if args.resume:
-    load_name = os.path.join(output_dir,
-      'faster_rcnn_{}_{}_{}.pth'.format(args.checksession, args.checkepoch, args.checkpoint))
-    print("loading checkpoint %s" % (load_name))
-    checkpoint = torch.load(load_name)
-    args.session = checkpoint['session']
-    args.start_epoch = checkpoint['epoch']
-    fasterRCNN.load_state_dict(checkpoint['model'])
-    optimizer.load_state_dict(checkpoint['optimizer'])
-    lr = optimizer.param_groups[0]['lr']
-    if 'pooling_mode' in checkpoint.keys():
-      cfg.POOLING_MODE = checkpoint['pooling_mode']
-    print("loaded checkpoint %s" % (load_name))
-
-  
-  if args.mGPUs:
-    mGPUs = True
-    fasterRCNN = nn.DataParallel(fasterRCNN)
-  else:
-    mGPUs = False
-  
-  train_iters_per_epoch = int(len(train_loader.dataset) / args.batch_size)
-  val_iters_per_epoch = int(len(val_loader.dataset))
-  session = args.session
-
-  if args.use_tfboard:
-    from tensorboardX import SummaryWriter
-    logger = SummaryWriter("logs")
-  
-  if args.evaluate:
-    validate(val_loader, fasterRCNN,0,val_iters_per_epoch,num_class, \
-            args.num_segments,vis,session)
-    
-  for epoch in range(args.start_epoch, args.max_epochs + 1):
-    
-    if epoch % (args.lr_decay_step + 1) == 0:
-        adjust_learning_rate(optimizer, args.lr_decay_gamma)
-        lr *= args.lr_decay_gamma
-
-    train(train_loader, fasterRCNN,lr,optimizer,
-    epoch,train_iters_per_epoch,session,mGPUs,logger,output_dir)
-    
-    # evaluate on validation set
-    if epoch % 4 == 0:
-      validate(val_loader, fasterRCNN,epoch,val_iters_per_epoch,num_class, \
-              args.num_segments,vis,session)
-
-def train(train_loader,fasterRCNN,lr,optimizer,epoch,train_iters_per_epoch,session,mGPUs,logger,output_dir):
-       
-    # initilize the tensor holder here.
-    im_data = torch.FloatTensor(1)
-    im_info = torch.FloatTensor(1)
-    num_boxes = torch.LongTensor(1)
-    gt_boxes = torch.FloatTensor(1)
-
-    # ship to cuda
-    im_data = im_data.cuda()
-    im_info = im_info.cuda()
-    num_boxes = num_boxes.cuda()
-    gt_boxes = gt_boxes.cuda()
-
-    # make variable
-    im_data = Variable(im_data)
-    im_info = Variable(im_info)
-    num_boxes = Variable(num_boxes)
-    gt_boxes = Variable(gt_boxes)
-
-    # setting to train mode
-    fasterRCNN.train()
-    #loss = 0
-    loss_temp = 0
-    data_iter = iter(train_loader)
-    for step in range (train_iters_per_epoch):
-        data = next(data_iter)
-        
-        with torch.no_grad():
-              im_data.resize_(data[0].size()).copy_(data[0])
-              gt_boxes.resize_(data[1].size()).copy_(data[1])
-              num_boxes.resize_(data[2].size()).copy_(data[2])
-              im_info.resize_(data[3].size()).copy_(data[3])
-              imgsize1 = im_data.size(3)
-              imgsize2 = im_data.size(4)
-              channel = im_data.size(2)
-              im_data = im_data.view(-1,channel,imgsize1,imgsize2)
-              im_info = im_info.view(-1,3)
-              gt_boxes= gt_boxes.view(-1,15,44)
-              num_boxes = num_boxes.view(-1)
-        
-        fasterRCNN.zero_grad()
-        # compute output
-        rois, cls_prob, bbox_pred, \
-        rpn_loss_cls, rpn_loss_box, \
-        RCNN_loss_cls, RCNN_loss_bbox, \
-        rois_label = fasterRCNN(im_data,im_info,gt_boxes,num_boxes)
-         
-        loss = rpn_loss_cls.mean() + rpn_loss_box.mean() \
-        + RCNN_loss_cls.mean() + RCNN_loss_bbox.mean()
-        loss_temp += loss.item()
-         
-        # backward
-        optimizer.zero_grad()
-        loss.backward()
-        #if args.net == "vgg16":
-        #  clip_gradient(fasterRCNN, 10.)
-        optimizer.step()
-
-        #if step % args.disp_interval == 0:
-        # end = time.time()
-        if step > 0:
-          loss_temp /= (100 + 1)
-
-        if mGPUs:
-          loss_rpn_cls = rpn_loss_cls.mean().item()
-          loss_rpn_box = rpn_loss_box.mean().item()
-          loss_rcnn_cls = RCNN_loss_cls.mean().item()
-          loss_rcnn_box = RCNN_loss_bbox.mean().item()
-          fg_cnt = torch.sum(rois_label.data.ne(0))
-          bg_cnt = rois_label.data.numel() - fg_cnt
-        else:
-          loss_rpn_cls = rpn_loss_cls.item()
-          loss_rpn_box = rpn_loss_box.item()
-          loss_rcnn_cls = RCNN_loss_cls.item()
-          loss_rcnn_box = RCNN_loss_bbox.item()
-          fg_cnt = torch.sum(rois_label.data.ne(0))
-          bg_cnt = rois_label.data.numel() - fg_cnt
-
-        print("[session %d][epoch %2d][iter %4d/%4d] loss: %.4f, lr: %.2e" \
-                                % (session, epoch, step, train_iters_per_epoch, loss, lr))
-    
-        print("\t\t\tfg/bg=(%d/%d)" % (fg_cnt, bg_cnt))
-        print("\t\t\trpn_cls: %.4f, rpn_box: %.4f, rcnn_cls: %.4f, rcnn_box %.4f" \
-                      % (loss_rpn_cls, loss_rpn_box, loss_rcnn_cls, loss_rcnn_box))
-        #if args.use_tfboard:
-        info = {
-            'loss': loss_temp,
-            'loss_rpn_cls': loss_rpn_cls,
-            'loss_rpn_box': loss_rpn_box,
-            'loss_rcnn_cls': loss_rcnn_cls,
-            'loss_rcnn_box': loss_rcnn_box
-        }
-        logger.add_scalars("logs_s_{}/losses".format(session), info, (epoch - 1) * train_iters_per_epoch + step)
-        loss_temp = 0
-        logger.close()
-    save_name = os.path.join(output_dir, 'faster_rcnn_{}_{}_{}.pth'.format(session, epoch, step))
-    save_checkpoint({
-      'session': session,
-      'epoch': epoch + 1,
-      'model': fasterRCNN.module.state_dict() if mGPUs else fasterRCNN.state_dict(),
-      'optimizer': optimizer.state_dict(),
-      'pooling_mode': cfg.POOLING_MODE,
-      #'class_agnostic': args.class_agnostic,
-    }, save_name)
-    print('save model: {}'.format(save_name))
-        
-
-def validate(val_loader,fasterRCNN,epoch,val_iters_per_epoch,
-              num_class,num_segments,vis,session):
-    
-    # initilize the tensor holder here.
-    im_data = torch.FloatTensor(1)
-    im_info = torch.FloatTensor(1)
-    num_boxes = torch.LongTensor(1)
-    gt_boxes = torch.FloatTensor(1)
-
-    # ship to cuda
-    #if args.cuda:
-    im_data = im_data.cuda()
-    im_info = im_info.cuda()
-    num_boxes = num_boxes.cuda()
-    gt_boxes = gt_boxes.cuda()
-
-    # make variable
-    im_data = Variable(im_data)
-    im_info = Variable(im_info)
-    num_boxes = Variable(num_boxes)
-    gt_boxes = Variable(gt_boxes)
-    data_iter = iter(val_loader)
-
-    fasterRCNN.eval()
-    final_score,tp,fp ,ap,final_pred_box= [],[],[],[],[]
-    score_final_frame,tp_final_frame,fp_final_frame,ap_final_frame =[],[],[],[]
-    num_gt = 0
-    num_gt_final_frame = 0
-
-    for step in range (val_iters_per_epoch):
+  fasterRCNN.eval()
+  data_iter = iter(test_loader)
+  final_score,tp,fp ,ap,final_pred_box= [],[],[],[],[]
+  score_final_frame,tp_final_frame,fp_final_frame,ap_final_frame =[],[],[],[]
+  num_gt = 0
+  num_gt_final_frame = 0
+  for step in range(num_sequence):
       data = next(data_iter)
       with torch.no_grad():
               im_data.resize_(data[0].size()).copy_(data[0])
@@ -575,17 +345,17 @@ def validate(val_loader,fasterRCNN,epoch,val_iters_per_epoch,
                 else:
                    bbox_pred_select[proposal_num[i]] = bbox_pred_view[proposal_num[i],class_num[i],:]
       bbox_pred = bbox_pred_select.squeeze(1)
-      bbox_pred = bbox_pred.reshape(num_segments,-1,4)
+      bbox_pred = bbox_pred.reshape(args.num_segments,-1,4)
 
       #calculate the scores ,tp,fp labels for the final proposals
       metrics = calc_proposal_after_nms(bbox_pred,scores,gtbb,num_class,gtlabels)
       fscore,tp1,fp1,tp_fin,fp_fin,gt,pred_box_ = metrics
 
       #calculate avg_prec for 8th frame
-      score_final_frame.append(fscore[num_segments-1])
-      tp_final_frame.extend(tp_fin[num_segments-1])
-      fp_final_frame.extend(fp_fin[num_segments-1])
-      num_gt_final_frame += gt // num_segments
+      score_final_frame.append(fscore[args.num_segments-1])
+      tp_final_frame.extend(tp_fin[args.num_segments-1])
+      fp_final_frame.extend(fp_fin[args.num_segments-1])
+      num_gt_final_frame += gt // args.num_segments
 
       #calculate avg_prec for all frames
       num_gt += gt
@@ -594,7 +364,7 @@ def validate(val_loader,fasterRCNN,epoch,val_iters_per_epoch,
       fp.extend(fp1)
       
       #visualisation on the val set
-      if vis:
+      if args.vis:
        activity_names = []*num_class
        index=np.unique(np.nonzero(gtbb)[1])
        g_t_box = gtbb[:,index,:]
@@ -616,10 +386,10 @@ def validate(val_loader,fasterRCNN,epoch,val_iters_per_epoch,
           cv2.imwrite(result, im2show)
        
 
-    print(f"completed calculating tp/fp labels for step: {step}")
+  print(f"completed calculating tp/fp labels for step: {step}")
     
     #calculate precision for i'th class
-    for j in range(1,num_class): #starts from 0 indices till 39
+  for j in range(1,num_class): #starts from 0 indices till 39
       s = []
       s_final =[]
       
@@ -638,36 +408,35 @@ def validate(val_loader,fasterRCNN,epoch,val_iters_per_epoch,
       for key, v in activity2id.items():
         if v == j :
           print(f"Class '{j}' ({key}) - AveragePrecision: {ap[j-1]}")
-          print(f"Class '{j}' ({key}) - AveragePrecision for {num_segments}th frame: {ap_final_frame[j-1]}")
+          print(f"Class '{j}' ({key}) - AveragePrecision for {args.num_segments}th frame: {ap_final_frame[j-1]}")
 
     
-    #print the mean average precision      
-    print(f"mAP for epoch [{epoch}]: {mean(ap)}")
-    print(f"mAP of {num_segments}th frame for epoch [{epoch}]: {mean(ap_final_frame)}")
+  #print the mean average precision      
+  print(f"mAP for epoch [{epoch}]: {mean(ap)}")
+  print(f"mAP of {num_segments}th frame for epoch [{epoch}]: {mean(ap_final_frame)}")
     
     
-
 def calc_proposal_after_nms (pred_boxes,scores,boxes,num_class,labels):
 
-  #take the non-.zero gt boxes and gt labels
-  index=np.unique(np.nonzero(boxes)[1])
-  gtbox = boxes[:,index,:]
-  gtlabel = labels[:,index,:]
-  num_gt = gtbox.shape[0]*gtbox.shape[1]
+   #take the non-.zero gt boxes and gt labels
+   index=np.unique(np.nonzero(boxes)[1])
+   gtbox = boxes[:,index,:]
+   gtlabel = labels[:,index,:]
+   num_gt = gtbox.shape[0]*gtbox.shape[1]
   
-  #apply nms to remove the extra proposals
-  keep = py_cpu_nms(pred_boxes,scores, 0.3)
+   #apply nms to remove the extra proposals
+   keep = py_cpu_nms(pred_boxes,scores, 0.3)
    
-  pred_box_after_nms= []
-  score_afer_nms = []
+   pred_box_after_nms= []
+   score_afer_nms = []
     
-  for i in range (pred_boxes.shape[0]):
+   for i in range (pred_boxes.shape[0]):
     pred_box_after_nms.append(pred_boxes[i,keep[i],:])
     score_afer_nms.append(scores[i,keep[i],:])
-  (score, tp_labels,fp_labels,tp_fin,fp_fin) = compute_tp_fp(pred_box_after_nms,score_afer_nms,
+   (score, tp_labels,fp_labels,tp_fin,fp_fin) = compute_tp_fp(pred_box_after_nms,score_afer_nms,
                                                                   gtbox,gtlabel)
   
-  return score,tp_labels,fp_labels,tp_fin,fp_fin,num_gt,pred_box_after_nms
+   return score,tp_labels,fp_labels,tp_fin,fp_fin,num_gt,pred_box_after_nms
           
 def compute_tp_fp(detected_boxes_at_ith_class,detected_scores_at_ith_class,
                                     box,label):
@@ -728,6 +497,6 @@ def compute_tp_fp(detected_boxes_at_ith_class,detected_scores_at_ith_class,
     # tp_labels = tp_labels.reshape(-1)
     # fp_labels = fp_labels.reshape(-1)
      return detected_scores_at_ith_class,tp,fp,tp_fin,fp_fin
-    
+
 if __name__ == '__main__':
-   main()    
+   main() 

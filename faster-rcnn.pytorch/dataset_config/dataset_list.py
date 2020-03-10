@@ -21,7 +21,6 @@ def main():
     val_videonames = [x.strip() for x in open(val_list_file)]
     test_videonames = [x.strip() for x in open(test_list_file)]
 
-    sequence_path = []
     #local variable to keep count 
     count = 0
     count1 = 0

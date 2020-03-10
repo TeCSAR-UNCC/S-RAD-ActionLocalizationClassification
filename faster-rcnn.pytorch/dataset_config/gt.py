@@ -27,23 +27,6 @@ if __name__ == "__main__":
         labels+=[label] 
         bboxes+=[bbox]
         f.write("%s %s %s\n" % ((frame),labels,bboxes))
-    '''sequence_path=list()
-    train_file = '/mnt/AI_RAID/VIRAT/actev-data-repo/dataset/train/train_list.txt'
-    frame_path = [x.strip().split(' ') for x in open(train_file)]
-    sequence_path = [str(y[0]).strip().split("frames/,")for y in frame_path]'''
     train_file = '/mnt/AI_RAID/VIRAT/actev-data-repo/dataset/train/train_list.txt'
     sequence_path = [x.strip().split('/frames/ ')[0] for x in open(train_file)]
-    print("x")   
-
-
-
-    # gives the frame number
-        #abel=data["annotations"][0]['actions'][0]['label'] #gives the actions in that frame
-        #data["annotations"][0]['actions'][0]['actors'][0]['bbox']
-                    #for actors in data:
-            #bbox = data["annotations"][0]['actions'][0]['actors'][0]['bbox']
-            #label=data["annotations"][0]['actions'][0]['label']
     
-    #label= [data["annotations"][0]['actions'][s]['label'] for s in range(len(data["annotations"][0]['actions']))]
-   
-

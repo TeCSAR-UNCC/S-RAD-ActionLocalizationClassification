@@ -255,3 +255,94 @@ def bbox_overlaps_batch(anchors, gt_boxes):
         raise ValueError('anchors input dimension is not correct.')
 
     return overlaps
+
+def cpu_bbox_overlaps(anchors, gt_boxes):
+    """
+    anchors: (N, 4) ndarray of float
+    gt_boxes: (K, 4) ndarray of float
+
+    overlaps: (N, K) ndarray of overlap between boxes and query_boxes
+    """
+    N = anchors.shape[0]
+    K = gt_boxes.shape[0]
+
+    gt_boxes_area = ((gt_boxes[:,2] - gt_boxes[:,0] + 1) *
+                (gt_boxes[:,3] - gt_boxes[:,1] + 1)).reshape(1, K)
+
+    anchors_area = ((anchors[:,2] - anchors[:,0] + 1) *
+                (anchors[:,3] - anchors[:,1] + 1)).reshape(N, 1)
+
+    boxes = np.expand_dims(anchors,axis = 1)
+    boxes = np.tile(boxes,(K,1))
+    query_boxes = np.expand_dims(gt_boxes,axis=0)
+    query_boxes = np.tile(query_boxes,(N,1,1))
+
+    iw = (np.minimum(boxes[:,:,2], query_boxes[:,:,2]) -
+        np.maximum(boxes[:,:,0], query_boxes[:,:,0]) + 1)
+    iw[iw < 0] = 0
+
+    ih = (np.minimum(boxes[:,:,3], query_boxes[:,:,3]) -
+        np.maximum(boxes[:,:,1], query_boxes[:,:,1]) + 1)
+    ih[ih < 0] = 0
+
+    ua = anchors_area + gt_boxes_area - (iw * ih)
+    overlaps = iw * ih / ua
+
+    return overlaps
+
+
+def cpu_bbox_overlaps_batch(anchors, gt_boxes):
+    """
+    anchors: (N, 4) ndarray of float
+    gt_boxes: (b, K, 5) ndarray of float
+
+    overlaps: (N, K) ndarray of overlap between boxes and query_boxes
+    """
+    batch_size = gt_boxes.shape[0]
+
+    final_overlaps = []
+    if len(anchors[0].shape) == 2:
+      for i in range(batch_size):
+        N = anchors[i].shape[0]
+        K = gt_boxes[i].shape[0]
+
+        gt_boxes_x = (gt_boxes[i,:,2] - gt_boxes[i,:,0] + 1)
+        gt_boxes_y = (gt_boxes[i,:,3] - gt_boxes[i,:,1] + 1)
+        gt_boxes_area = (gt_boxes_x * gt_boxes_y).reshape(1, K)
+
+        anchors_boxes_x = (anchors[i][:,2] - anchors[i][:,0] + 1)
+        anchors_boxes_y = (anchors[i][:,3] - anchors[i][:,1] + 1)
+        anchors_area = (anchors_boxes_x * anchors_boxes_y).reshape(N, 1)
+
+        gt_area_zero = (gt_boxes_x == 1) & (gt_boxes_y == 1)
+        anchors_area_zero = (anchors_boxes_x == 1) & (anchors_boxes_y == 1)
+
+        boxes = np.expand_dims(anchors[i],axis = 1)
+        boxes = np.tile(boxes,(K,1))
+        query_boxes = np.expand_dims(gt_boxes[i],axis=0)
+        query_boxes = np.tile(query_boxes,(N,1,1))
+        #boxes = anchors.view(batch_size, N, 1, 4).expand(batch_size, N, K, 4)
+        #query_boxes = gt_boxes.view(batch_size, 1, K, 4).expand(batch_size, N, K, 4)
+
+        iw = (np.minimum(boxes[:,:,2], query_boxes[:,:,2]) -
+            np.maximum(boxes[:,:,0], query_boxes[:,:,0]) + 1)
+        iw[iw < 0] = 0
+
+        ih = (np.minimum(boxes[:,:,3], query_boxes[:,:,3]) -
+            np.maximum(boxes[:,:,1], query_boxes[:,:,1]) + 1)
+        ih[ih < 0] = 0
+        ua = anchors_area + gt_boxes_area - (iw * ih)
+
+        overlaps = iw * ih / ua
+        g = gt_area_zero.reshape(1,K)
+        a = anchors_area_zero.reshape(N,1)
+        # mask the overlap here.
+        overlaps = np.ma.array(overlaps, mask=np.tile(g,(N,1)), fill_value=0)
+        overlaps =overlaps.filled()
+        overlaps = np.ma.array(overlaps, mask=np.tile(a,(1,K)), fill_value=-1)
+        overlaps =overlaps.filled()
+        final_overlaps.append(overlaps)
+    else:
+        raise ValueError('anchors input dimension is not correct.')
+
+    return final_overlaps

@@ -104,15 +104,15 @@ def soft_nms(boxes,labels, sigma=0.5, Nt=0.3, threshold=0.001, method=0):
 
 
 def py_cpu_nms(box,label, thresh):
-    """Pure Python NMS baseline."""
-    #label = label.cpu().numpy()
-    #box = box.detach().cpu().numpy()
-    
-    x1 = box[:, 0]
-    y1 = box[:, 1]
-    x2 = box[:, 2]
-    y2 = box[:, 3]
-    scores = label[:, ]
+  """Pure Python NMS baseline."""
+  
+  final_keep = []
+  for j in range(box.shape[0]):
+    x1 = box[j,:, 0]
+    y1 = box[j,:, 1]
+    x2 = box[j,:, 2]
+    y2 = box[j,:, 3]
+    scores = label[j,:, ]
 
     areas = (x2 - x1 + 1) * (y2 - y1 + 1)
     sc =np.amax(scores,axis =1)
@@ -130,9 +130,12 @@ def py_cpu_nms(box,label, thresh):
         w = np.maximum(0.0, xx2 - xx1 + 1)
         h = np.maximum(0.0, yy2 - yy1 + 1)
         inter = w * h
-        ovr = inter / (areas[i] + areas[order[1:]] - inter)
 
+        #find the overlap of ith proposal with other proposals
+        ovr = inter / (areas[i] + areas[order[1:]] - inter)
+      
+        #find the proposals that have IOU scores < 0.3
         inds = np.where(ovr <= thresh)[0]
         order = order[inds + 1]
-
-    return keep
+    final_keep.append(keep)
+  return final_keep

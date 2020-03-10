@@ -108,7 +108,7 @@ class Action_dataset(data.Dataset):
             t_stride = 64 // self.num_segments
             start_idx = 0 if sample_pos == 1 else np.random.randint(0, sample_pos - 1)
             offsets = [(idx * t_stride + start_idx) % record.num_frames for idx in range(self.num_segments)]
-            return np.array(offsets) + 1
+            return np.array(offsets)
         elif self.uniform_sample:  # normal sample
             average_duration = (record.num_frames) // self.num_segments
             if average_duration > 0:
@@ -203,6 +203,7 @@ class Action_dataset(data.Dataset):
         record = self.video_list[index]
         #self.yaml_file(index)
         segment_indices = self._sample_indices(record)
+        segment_indices = np.sort(segment_indices)
         return self.get( index, record, segment_indices,self.new_size)
                
     def __len__(self):

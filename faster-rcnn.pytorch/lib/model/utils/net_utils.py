@@ -47,23 +47,105 @@ def clip_gradient(model, clip_norm):
         if p.requires_grad and p.grad is not None:
             p.grad.mul_(norm)
 
-def vis_detections(im, class_name, dets, thresh=0.8):
+def vis_detections(im, class_name, scores,pred_box,thresh=0.8):
     """Visual debugging of detections."""
-    for i in range(np.minimum(10, dets.shape[0])):
-        bbox = tuple(int(np.round(x)) for x in dets[i, :4])
-        score = dets[i, -1]
-        if score > thresh:
-            cv2.rectangle(im, bbox[0:2], bbox[2:4], (0, 204, 0), 2)
-            cv2.putText(im, '%s: %.3f' % (class_name, score), (bbox[0], bbox[1] + 15), cv2.FONT_HERSHEY_PLAIN,
+    for i in range(np.minimum(10, scores.shape[0])):
+        bbox = pred_box[i]
+        index = np.nonzero(scores[i] > thresh)
+        score = scores[i][index]
+        if score.all() !=0:
+            im = cv2.rectangle(im, (int(bbox[0]),int(bbox[1])), \
+             (int(bbox[2]),int(bbox[3])), (0, 0, 204), 2)
+            if len(index[0]) > 0:
+                for ind in range(len(index[0])):
+                    cv2.putText(im,"'{0}:{1:03f}'".format(class_name[index[0][ind]],score[ind]),
+                (int(bbox[0]), int(bbox[1]) + 15*ind), cv2.FONT_HERSHEY_PLAIN,\
                         1.0, (0, 0, 255), thickness=1)
+            '''else:
+                cv2.putText(im, "'{0}:{1}'".format(class_name[index[0][0]]\
+                    ,score),(int(bbox[0]), int(bbox[1]) + 15), cv2.FONT_HERSHEY_PLAIN,
+                        1.0, (0, 0, 255), thickness=1)'''
+
+        
     return im
 
+def gt_visuals(im, class_name,pred_box,labels):
+    """Visualizing the ground truth."""
+    for i in range(labels.shape[0]):
+        bbox = pred_box[i]
+        im = cv2.rectangle(im, (int(bbox[0]),int(bbox[1])), \
+             (int(bbox[2]),int(bbox[3])), (0, 204, 0), 2)
+        index =np.where(labels[i]==1)
+        for ind in range(len(index[0])):
+            cv2.putText(im,"'{0}'".format(class_name[index[0][ind]]),
+                (int(bbox[2]), int(bbox[3]) + 15*ind), cv2.FONT_HERSHEY_PLAIN,\
+                        1.0, (0, 255, 0), thickness=1)
+        
+    return im
 
 def adjust_learning_rate(optimizer, decay=0.1):
     """Sets the learning rate to the initial LR decayed by 0.5 every 20 epochs"""
     for param_group in optimizer.param_groups:
         param_group['lr'] = decay * param_group['lr']
 
+def precision_recall(tp_labels,fp_labels,scores,num_gt):
+  ap, p, r = [], [], []
+
+  scores = np.asarray(scores)
+  index = np.argsort(-scores)
+  
+  scores= scores[index]
+
+  fp_labels = np.asarray(fp_labels)
+  fp_labels = fp_labels[index]
+  tp_labels = np.asarray(tp_labels)
+  tp_labels = tp_labels[index]
+  #if tp_labels == 0 and n_gt == 0:
+  #  continue
+  if np.sum(tp_labels) == 0 or num_gt == 0:
+            ap.append(0)
+            r.append(0)
+            p.append(0)
+  else:
+   
+   fpc = fp_labels.cumsum()
+   tpc = tp_labels.cumsum()
+
+   precision = tpc.astype(float) / (
+        tpc + fpc + 0.00001
+    )
+   p.append(precision)
+   recall = tpc.astype(float) / num_gt
+   r.append(recall)
+   ap.append(compute_ap(recall, precision))
+  #print("Both positives and gt are zero")
+  return ap
+
+def compute_ap(recall, precision):
+    """ Compute the average precision, given the recall and precision curves.
+    Code originally from https://github.com/rbgirshick/py-faster-rcnn.
+    # Arguments
+        recall:    The recall curve (list).
+        precision: The precision curve (list).
+    # Returns
+        The average precision as computed in py-faster-rcnn.
+    """
+    # correct AP calculation
+    # first append sentinel values at the end
+    mrec = np.concatenate(([0.0], recall, [1.0]))
+    mpre = np.concatenate(([0.0], precision, [0.0]))
+
+    # compute the precision envelope
+    for i in range(mpre.size - 1, 0, -1):
+        mpre[i - 1] = np.maximum(mpre[i - 1], mpre[i])
+
+    # to calculate area under PR curve, look for points
+    # where X axis (recall) changes value
+    i = np.where(mrec[1:] != mrec[:-1])[0]
+
+    # and sum (\Delta recall) * prec
+    ap = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])
+    return ap
 
 def save_checkpoint(state, filename):
     torch.save(state, filename)
