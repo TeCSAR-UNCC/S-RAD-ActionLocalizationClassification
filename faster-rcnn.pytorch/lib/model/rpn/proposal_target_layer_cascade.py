@@ -138,9 +138,9 @@ class _ProposalTargetLayer(nn.Module):
         max_overlaps, gt_assignment = torch.max(overlaps, 2)
         
         gt = gt_boxes[:,:,4:]
-        labels_batch = all_rois.new(batch_size, rois_per_image,40).zero_()
+        labels_batch = all_rois.new(batch_size, rois_per_image,num_classes).zero_() #class
         rois_batch  = all_rois.new(batch_size, rois_per_image, 5).zero_()
-        gt_rois_batch = all_rois.new(batch_size, rois_per_image, 44).zero_()
+        gt_rois_batch = all_rois.new(batch_size, rois_per_image, (num_classes+4)).zero_() #class
         
         # Guard against the case when an image has fewer than max_fg_rois_per_image
         
@@ -238,7 +238,7 @@ class _ProposalTargetLayer(nn.Module):
         max_overlaps, gt_assignment = torch.max(overlaps, 2)
         
         gt = gt_boxes[:,:,4:]
-        labels_batch = all_rois.new(batch_size, rois_per_image,40).zero_()
+        labels_batch = all_rois.new(batch_size, rois_per_image,num_classes).zero_()
         #rois_batch  = all_rois.new(batch_size, rois_per_image, 5).zero_()
         #gt_rois_batch = all_rois.new(batch_size, rois_per_image, 44).zero_()
         

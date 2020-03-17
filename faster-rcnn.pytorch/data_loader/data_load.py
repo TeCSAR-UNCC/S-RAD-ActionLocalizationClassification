@@ -73,13 +73,14 @@ activity2id = {
 
 
 class Action_dataset(data.Dataset):
-    def __init__(self, train_path,list_file,
+    def __init__(self, train_path,num_class,list_file,
                  num_segments=3, modality='RGB',
                  transform=None,random_shift=True, test_mode=False,
                  dense_sample=False,uniform_sample=True,
                  random_sample=False,strided_sample=False, input_size = 600):
                  
         self.train_path = train_path
+        self.num_class = num_class
         self.list_file = list_file
         self.num_segments = num_segments
         self.modality = modality
@@ -143,10 +144,10 @@ class Action_dataset(data.Dataset):
       bbox = list()
       images = list()
       img_path = list()
-      gt = np.zeros((len(indices),15,44),
+      gt = np.zeros((len(indices),15,(self.num_class + 4)),
                   dtype=np.float32)
-      num_boxes = np.zeros((8),dtype=np.float32)
-      im_info = np.zeros((8,3),dtype=np.float32)
+      num_boxes = np.zeros((self.num_segments),dtype=np.float32)
+      im_info = np.zeros((self.num_segments,3),dtype=np.float32)
       npy_file = (os.path.join(str(sequence_path),'ground_truth.npy'))
       data = np.load(npy_file)
           
@@ -158,7 +159,7 @@ class Action_dataset(data.Dataset):
                 for seg_ind in indices: #iterate through every image
                     count = 0
                     
-                    bboxes = np.zeros((15,44),dtype= float)
+                    bboxes = np.zeros((15,(self.num_class + 4)),dtype= float)
                     p = int(seg_ind) + int(frame)
                     image_path = os.path.join(record.path, '{:06d}.jpg'.format(p))
                     im = imread(image_path)
@@ -177,7 +178,7 @@ class Action_dataset(data.Dataset):
                             bbox_new =[]
                             bbox = (i[2:6])*im_scale
                             bbox_new[0:4] = bbox
-                            bbox_new[4:]=i[6:]
+                            bbox_new[4:]=i[6:6+self.num_class]
                             bboxes[count,:]+=bbox_new
                             count+=1
                             

@@ -216,7 +216,7 @@ def main():
   normalize = GroupNormalize(input_mean, input_std)
 
   train_loader = torch.utils.data.DataLoader(
-        Action_dataset(train_path, args.train_list, num_segments=args.num_segments,
+        Action_dataset(train_path,num_class, args.train_list, num_segments=args.num_segments,
                    modality=args.modality,random_shift=True, test_mode=False,
                    input_size = input_size,
                    transform=torchvision.transforms.Compose([ 
@@ -228,7 +228,7 @@ def main():
         drop_last=True)  # prevent something not % n_GPU
   
   val_loader = torch.utils.data.DataLoader(
-        Action_dataset(val_path, args.val_list, num_segments=args.num_segments,
+        Action_dataset(val_path, num_class,args.val_list, num_segments=args.num_segments,
                    modality=args.modality,random_shift=True, test_mode=False,
                    input_size = input_size,
                    transform=torchvision.transforms.Compose([ 
@@ -368,14 +368,14 @@ def main():
         lr *= args.lr_decay_gamma
 
     train(train_loader, fasterRCNN,lr,optimizer,
-    epoch,train_iters_per_epoch,session,mGPUs,logger,output_dir)
+    epoch,num_class,train_iters_per_epoch,session,mGPUs,logger,output_dir)
     
     # evaluate on validation set
     if epoch % 4 == 0:
       validate(val_loader, fasterRCNN,epoch,val_iters_per_epoch,num_class, \
               args.num_segments,vis,session)
 
-def train(train_loader,fasterRCNN,lr,optimizer,epoch,train_iters_per_epoch,session,mGPUs,logger,output_dir):
+def train(train_loader,fasterRCNN,lr,optimizer,epoch,num_class,train_iters_per_epoch,session,mGPUs,logger,output_dir):
        
     # initilize the tensor holder here.
     im_data = torch.FloatTensor(1)
@@ -413,7 +413,7 @@ def train(train_loader,fasterRCNN,lr,optimizer,epoch,train_iters_per_epoch,sessi
               channel = im_data.size(2)
               im_data = im_data.view(-1,channel,imgsize1,imgsize2)
               im_info = im_info.view(-1,3)
-              gt_boxes= gt_boxes.view(-1,15,44)
+              gt_boxes= gt_boxes.view(-1,15,num_class+4)
               num_boxes = num_boxes.view(-1)
         
         fasterRCNN.zero_grad()
@@ -507,10 +507,15 @@ def validate(val_loader,fasterRCNN,epoch,val_iters_per_epoch,
     data_iter = iter(val_loader)
 
     fasterRCNN.eval()
-    final_score,tp,fp ,ap,final_pred_box= [],[],[],[],[]
-    score_final_frame,tp_final_frame,fp_final_frame,ap_final_frame =[],[],[],[]
-    num_gt = 0
-    num_gt_final_frame = 0
+    all_boxes = [[[[]for _ in range(num_class)] for _ in range(num_segments)]
+               for _ in range(val_iters_per_epoch)]
+
+    max_per_image = 15
+    bins = 9 
+    tp_labels = np.zeros((num_class,bins),dtype=int)
+    fp_labels = np.zeros((num_class,bins),dtype=int)
+    fn_labels = np.zeros((num_class,bins),dtype=int)
+    all_pred_box,all_gtbb,all_gtlabels,all_scores=[],[],[],[]
 
     for step in range (val_iters_per_epoch):
       data = next(data_iter)
@@ -524,7 +529,7 @@ def validate(val_loader,fasterRCNN,epoch,val_iters_per_epoch,
               channel = im_data.size(2)
               im_data = im_data.view(-1,channel,imgsize1,imgsize2)
               im_info = im_info.view(-1,3)
-              gt_boxes= gt_boxes.view(-1,15,44)
+              gt_boxes= gt_boxes.view(-1,15,num_class+4)
               num_boxes = num_boxes.view(-1)
               img_path = data[4]
       rois, cls_prob, bbox_pred, \
@@ -532,11 +537,6 @@ def validate(val_loader,fasterRCNN,epoch,val_iters_per_epoch,
       RCNN_loss_cls, RCNN_loss_bbox, \
       rois_label = fasterRCNN(im_data, im_info, gt_boxes, num_boxes)
       
-      #get the rois label to index out the single bbox pred
-      RCNN_proposal_target = _ProposalTargetLayer(num_class)
-      rois_label = RCNN_proposal_target(rois, gt_boxes, num_boxes,val =1)
-      rois_label = rois_label.view(-1,40)
-
       #calculate the scores and boxes
       scores = cls_prob.data
       boxes = rois.data[:, :, 1:5]
@@ -553,181 +553,161 @@ def validate(val_loader,fasterRCNN,epoch,val_iters_per_epoch,
       gtlabels = gt_boxes[:,:,4:]
       pred_boxes /= data[3][0][1][2].item()
       gtbb /= data[3][0][1][2].item()
-
-      #move the items to cpu to save GPU memory
-      rois_label = rois_label.cpu().numpy()
-      proposal_num,class_num = np.nonzero(rois_label)
       
-      pred_boxes = pred_boxes.cpu().numpy()
+      #move the groudtruth to cpu
       gtbb = gtbb.cpu().numpy()
       gtlabels = gtlabels.cpu().numpy()
-      scores = scores.cpu().numpy()
-      #code to get single bbox detection from the 40 bbox detections for a single proposal
-      pbox = pred_boxes.reshape(-1,pred_boxes.shape[2])
-      bbox_pred_view = pbox.reshape(pbox.shape[0], int(pbox.shape[1] / 4), 4)
-      bbox_pred_select = np.zeros((pbox.shape[0], 1, 4),dtype = float)
-            
-      for i in range (proposal_num.shape[0]):
-                dup = np.argwhere(proposal_num == proposal_num[i])
-                if (len(dup)) != 1:
-                   bbox_pred_select[proposal_num[i]] = bbox_pred_view[proposal_num[i],class_num[dup],:].mean(0)
-                    
-                else:
-                   bbox_pred_select[proposal_num[i]] = bbox_pred_view[proposal_num[i],class_num[i],:]
-      bbox_pred = bbox_pred_select.squeeze(1)
-      bbox_pred = bbox_pred.reshape(num_segments,-1,4)
 
-      #calculate the scores ,tp,fp labels for the final proposals
-      metrics = calc_proposal_after_nms(bbox_pred,scores,gtbb,num_class,gtlabels)
-      fscore,tp1,fp1,tp_fin,fp_fin,gt,pred_box_ = metrics
+      #calculate the predictions for each class in an image
+      for image in range(num_segments):
+        for class_id in range(1,num_class):
+        
+         inds = torch.nonzero(scores[image,:,class_id]).view(-1)
+         # if there is det
+         if inds.numel() > 0:
+            cls_scores = scores[image,inds,class_id]
+            _, order = torch.sort(cls_scores, 0, True)
+            cls_boxes = pred_boxes[image,inds, class_id * 4:(class_id + 1) * 4]
+            cls_dets = torch.cat((cls_boxes, cls_scores.unsqueeze(1)), 1)
+            cls_dets = cls_dets[order,:]
+            keep = nms(cls_boxes[order, :], cls_scores[order], cfg.TEST.NMS)
+            cls_dets = cls_dets[keep.view(-1)]  
+            all_boxes[step][image][class_id] = cls_dets.cpu().numpy()
 
-      #calculate avg_prec for 8th frame
-      score_final_frame.append(fscore[num_segments-1])
-      tp_final_frame.extend(tp_fin[num_segments-1])
-      fp_final_frame.extend(fp_fin[num_segments-1])
-      num_gt_final_frame += gt // num_segments
+        if max_per_image > 0:
+          image_scores = np.hstack([all_boxes[step][image][class_id][:, -1]
+                                    for class_id in range(1, num_class)])
+          if len(image_scores) > max_per_image:
+              image_thresh = np.sort(image_scores)[-max_per_image]
+              for class_id in range(1, num_class):
+                  keep = np.where(all_boxes[step][image][class_id][:, -1] >= image_thresh)[0]
+                  all_boxes[step][image][class_id] = all_boxes[step][image][class_id][keep, :]
+        
+        #vis here
 
-      #calculate avg_prec for all frames
-      num_gt += gt
-      final_score.append(fscore)
-      tp.extend(tp1)
-      fp.extend(fp1)
-      
-      #visualisation on the val set
-      if vis:
-       activity_names = []*num_class
-       index=np.unique(np.nonzero(gtbb)[1])
-       g_t_box = gtbb[:,index,:]
-       g_t_label = gtlabels[:,index,:]
-       for frame in range(batch_size):
-          str_path = ' '.join([str(elem) for elem in img_path[frame]]) 
-          im = cv2.imread(str_path)
-          im2show = np.copy(im)
-          for activity, value in activity2id.items():
-            activity_names.append(activity)
-          im2show = vis_detections(im2show, activity_names,fscore[frame], \
-                                   pred_box_[frame],0.3)
-          
-          #draw the ground truth to the detections
-          im2show = gt_visuals(im2show,activity_names,g_t_box[frame],g_t_label[frame])
-          image_file=str(str_path).strip().split('/frames/')[1]
-          frame_num= str(image_file).split(".")[0]
-          result = 'pred_{}_{}_{}_{:06d}.png'.format(session,epoch,step,int(frame_num))
-          cv2.imwrite(result, im2show)
-       
-
-    print(f"completed calculating tp/fp labels for step: {step}")
-    
-    #calculate precision for i'th class
-    for j in range(1,num_class): #starts from 0 indices till 39
-      s = []
-      s_final =[]
-      
-      for video in range (val_iters_per_epoch):
-       for frame in range(batch_size):
-        imd_score = final_score[video][frame][:,j]
-        s.extend(imd_score)
-       fin_score = score_final_frame[video][:,j]
-       s_final.extend(fin_score)
-      
-
-      ap += precision_recall(tp,fp, s, num_gt )
-      ap_final_frame += precision_recall(tp_final_frame,fp_final_frame, s_final, \
-                                         num_gt_final_frame )
-          
+        #calculate tp_fp_fn
+        compute_tp_fp(all_boxes[step][image],gtlabels[image],gtbb[image], \
+                      num_class,tp_labels,fp_labels,fn_labels,bins)
+    print(' completed step:{}'.format(step))
+    ap = precision_recall(tp_labels,fp_labels,fn_labels,num_class)
+    for n in range(1,num_class):
       for key, v in activity2id.items():
-        if v == j :
-          print(f"Class '{j}' ({key}) - AveragePrecision: {ap[j-1]}")
-          print(f"Class '{j}' ({key}) - AveragePrecision for {num_segments}th frame: {ap_final_frame[j-1]}")
-
-    
+        if v == n :
+          print(f"Class '{n}' ({key}) - AveragePrecision: {ap[n-1]}")
+              
     #print the mean average precision      
     print(f"mAP for epoch [{epoch}]: {mean(ap)}")
-    print(f"mAP of {num_segments}th frame for epoch [{epoch}]: {mean(ap_final_frame)}")
+
+def compute_tp_fp(all_boxes,gtlabels,gtbb,num_class,tp_labels,fp_labels,fn_labels,bins):
+    bin_dict = {
+                  0: lambda x: 1 if x>= 0.1 else 0,
+                  1: lambda x: 1 if x>= 0.2 else 0,
+                  2: lambda x: 1 if x>= 0.3 else 0,
+                  3: lambda x: 1 if x>= 0.4 else 0,
+                  4: lambda x: 1 if x>= 0.5 else 0,
+                  5: lambda x: 1 if x>= 0.6 else 0,
+                  6: lambda x: 1 if x>= 0.7 else 0,
+                  7: lambda x: 1 if x>= 0.8 else 0,
+                  8: lambda x: 1 if x>= 0.9 else 0
+                }
+    
+    #get the non -zero groundtruth for that image
+    index=np.unique(np.nonzero(gtbb)[0])
+    gtbox = gtbb[index,:]       #[gt,4]
+    gtlabel = gtlabels[index,:] #[gt,40]
     
     
 
-def calc_proposal_after_nms (pred_boxes,scores,boxes,num_class,labels):
+    # compute tp fp and fn for all class in that image 
+    for class_id in range(1,num_class):
 
-  #take the non-.zero gt boxes and gt labels
-  index=np.unique(np.nonzero(boxes)[1])
-  gtbox = boxes[:,index,:]
-  gtlabel = labels[:,index,:]
-  num_gt = gtbox.shape[0]*gtbox.shape[1]
-  
-  #apply nms to remove the extra proposals
-  keep = py_cpu_nms(pred_boxes,scores, 0.3)
-   
-  pred_box_after_nms= []
-  score_afer_nms = []
-    
-  for i in range (pred_boxes.shape[0]):
-    pred_box_after_nms.append(pred_boxes[i,keep[i],:])
-    score_afer_nms.append(scores[i,keep[i],:])
-  (score, tp_labels,fp_labels,tp_fin,fp_fin) = compute_tp_fp(pred_box_after_nms,score_afer_nms,
-                                                                  gtbox,gtlabel)
-  
-  return score,tp_labels,fp_labels,tp_fin,fp_fin,num_gt,pred_box_after_nms
-          
-def compute_tp_fp(detected_boxes_at_ith_class,detected_scores_at_ith_class,
-                                    box,label):
-     
-     #compute IOU between predicted proposal and gt box
-     overlaps = cpu_bbox_overlaps_batch(detected_boxes_at_ith_class, box)
-     num_boxes_per_img = box.shape[1]
-     batch_size = box.shape[0]
-     # initilaise the tp,fp labels 
-     tp,tp_fin=[],[]
-     fp,fp_fin=[],[]
+      #keep track of propposal and gt
+      is_gt_detected =[] 
+      is_proposal_labeled =[]
 
-     for i in range(batch_size):
-       is_gt_detected =[] 
-       is_proposal_labeled =[]
-     
-       num_proposal = len(detected_boxes_at_ith_class[i])
-       tp_labels = np.zeros(num_proposal)
-       fp_labels = np.zeros(num_proposal)
-     
-       #calculate the tp,fp labels for each proposal and keep count of gt and detections match
+      all_detectbb = all_boxes[class_id]
+      pred_bb = all_detectbb[:,:4]
+      pred_label = all_detectbb[:,4:]
+      labels = gtlabel[:,class_id]
+
+      num_boxes_per_img = gtbox.shape[0]
+      num_proposal = pred_bb.shape[0]
+      
+      if all_detectbb.any() !=0:
+       overlaps = cpu_bbox_overlaps(pred_bb, gtbox)
+       #num_boxes_per_img = gtbox.shape[0]
+       #num_proposal = pred_bb.shape[0]
+
        if (num_proposal>0) and (num_boxes_per_img !=0):
             match_table = np.zeros((num_proposal,num_boxes_per_img),dtype=float)
             for p in range(num_proposal):
                 for g in range(num_boxes_per_img):
-                    if overlaps[i][p][g] >= 0.5:
-                        match_table[p,g] = overlaps[i][p][g]
+                    if overlaps[p][g] >= 0.5:
+                        match_table[p,g] = overlaps[p][g]
                     
             best_match = match_table.max()
             while best_match >= 0.5:
                 match_pos = np.where(match_table == best_match)
                 p = match_pos[0][0]
-                detect_label = detected_scores_at_ith_class[i][p]
-                detect_pos = np.argwhere(detect_label > 0.6)
+                detect_label = pred_label[p]
                 g = match_pos[1][0]
-                gt_label = label[i][g]
-                gt_pos = np.argwhere(gt_label ==1 )
+                gt_label = labels[g]
                 is_gt_detected += [g]
                 is_proposal_labeled+=[p]
-                if len(gt_pos) == len(detect_pos) and np.equal(gt_pos,detect_pos).all():
-                  tp_labels[p] = 1
-                else:
-                  fp_labels[p] = 1
+
+                if gt_label == 1:
+                #if there is groundtruth and pred_score matches with the bin = tp
+                 for bin_id in range(bins):
+                  bin_value=  bin_dict[bin_id](detect_label)
+                  if bin_value == 1 : 
+                    tp_labels[class_id][bin_id] += 1
+                
+                  else: #there is a gt but pred_scores doesnt match with bin = fn
+                    fn_labels[class_id][bin_id] +=1
+                
+                else: #no gt but pred_scores matches bin = fp
+                  for bin_id in range(bins):
+                   bin_value=  bin_dict[bin_id](detect_label)
+                   if bin_value == 1 : 
+                      fp_labels[class_id][bin_id] +=1 
+                
                 match_table[p,:] = np.zeros(match_table[p,:].shape)
                 match_table[:,g] = np.zeros(match_table[:,g].shape)
 
-                best_match = match_table.max()
-
+                best_match = match_table.max()   
+            
             #count the left out proposals as fp      
             for k in range(num_proposal): 
-              if k not in is_proposal_labeled:
-                fp_labels[k] = 1        
+             if k not in is_proposal_labeled:
+               for bin_id in range(bins):
+                   detect_label = pred_label[k]
+                   bin_value=  bin_dict[bin_id](detect_label)
+                   if bin_value == 1 : 
+                      fp_labels[class_id][bin_id] +=1    
             
-            tp.extend(tp_labels)
-            fp.extend(fp_labels)
-            tp_fin.append(tp_labels)
-            fp_fin.append(fp_labels)
-    # tp_labels = tp_labels.reshape(-1)
-    # fp_labels = fp_labels.reshape(-1)
-     return detected_scores_at_ith_class,tp,fp,tp_fin,fp_fin
+           
+            #count the left out groundtruths as fn
+            for gt in range(num_boxes_per_img):
+                if gt not in is_gt_detected:
+                  if labels[gt] == 1:
+                    fn_labels[class_id,:] += 1   
+       
+      else:
+       if labels.any() == 0:
+          tp_labels[class_id] += 0
+          fp_labels[class_id] += 0
+          fn_labels[class_id] += 0
+       else:
+        for gt in range(num_boxes_per_img):
+         if labels[gt] == 1:
+           fn_labels[class_id,:] += 1 
+
+
+              
+
+
     
+
+
 if __name__ == '__main__':
    main()    

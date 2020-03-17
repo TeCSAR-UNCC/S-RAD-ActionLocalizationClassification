@@ -298,7 +298,7 @@ def cpu_bbox_overlaps_batch(anchors, gt_boxes):
 
     overlaps: (N, K) ndarray of overlap between boxes and query_boxes
     """
-    batch_size = gt_boxes.shape[0]
+    #batch_size = gt_boxes.shape[0]
 
     final_overlaps = []
     if len(anchors[0].shape) == 2:

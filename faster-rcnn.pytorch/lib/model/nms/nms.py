@@ -115,8 +115,8 @@ def py_cpu_nms(box,label, thresh):
     scores = label[j,:, ]
 
     areas = (x2 - x1 + 1) * (y2 - y1 + 1)
-    sc =np.amax(scores,axis =1)
-    order = sc.argsort()[::-1]
+    #sc =np.amax(scores,axis =1)
+    order = scores.argsort()[::-1]
 
     keep = []
     while order.size > 0:

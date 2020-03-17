@@ -147,8 +147,8 @@ class _AnchorTargetLayer(nn.Module):
         offset = torch.arange(0, batch_size)*gt_boxes.size(1)
 
         argmax_overlaps = argmax_overlaps + offset.view(batch_size, 1).type_as(argmax_overlaps)
-        bbox_targets = _compute_targets_batch(anchors, gt_boxes.view(-1,44)[argmax_overlaps.view(-1), :].view(batch_size, -1, 44))
-
+        bbox_targets = _compute_targets_batch(anchors, gt_boxes.view(-1,8)[argmax_overlaps.view(-1), :].view(batch_size, -1, 8))
+        #class
         # use a single value instead of 4 values for easy index.
         bbox_inside_weights[labels==1] = cfg.TRAIN.RPN_BBOX_INSIDE_WEIGHTS[0]
 

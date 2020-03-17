@@ -57,7 +57,7 @@ class _fasterRCNN(nn.Module):
         if self.training:
             roi_data = self.RCNN_proposal_target(rois, gt_boxes, num_boxes,val=0)
             rois, rois_label, rois_target, rois_inside_ws, rois_outside_ws = roi_data
-            rois_label = Variable(rois_label.view(-1,40))#.long()) #modified
+            rois_label = Variable(rois_label.view(-1,self.classes))#.long()) #modified
             rois_target = Variable(rois_target.view(-1, rois_target.size(2)))
             rois_inside_ws = Variable(rois_inside_ws.view(-1, rois_inside_ws.size(2)))
             rois_outside_ws = Variable(rois_outside_ws.view(-1, rois_outside_ws.size(2)))
@@ -66,7 +66,6 @@ class _fasterRCNN(nn.Module):
 
         else:
             rois_label = None
-            #rois_label = self.RCNN_proposal_target(rois, gt_boxes, num_boxes,val=1)
             rois_target = None
             rois_inside_ws = None
             rois_outside_ws = None
@@ -99,12 +98,11 @@ class _fasterRCNN(nn.Module):
                    bbox_pred_select[proposal_num[i]] = bbox_pred_view[proposal_num[i],class_num[i],:]
                 
                     
-            #bbox_pred_select = torch.gather(bbox_pred_view, 1, rois_label.view(rois_label.size(0),40,1).expand(rois_label.size(0),40,4))
             bbox_pred = bbox_pred_select.squeeze(1)
 
         # compute object classification probability
         cls_score = self.RCNN_cls_score(pooled_feat)
-        cls_prob = F.softmax(cls_score, 1)
+        cls_prob = torch.sigmoid(cls_score)
 
         RCNN_loss_cls = 0
         RCNN_loss_bbox = 0

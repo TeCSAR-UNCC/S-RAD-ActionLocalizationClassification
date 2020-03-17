@@ -49,7 +49,7 @@ def return_kinetics(modality):
     return filename_categories, filename_imglist_train, filename_imglist_val, root_data, prefix
 
 def return_virat(modality):
-    filename_categories = 40
+    filename_categories = 4
     if modality == 'RGB':
         train_data = ROOT_DATASET + 'VIRAT/actev-data-repo/dataset/train/'
         val_data = ROOT_DATASET + 'VIRAT/actev-data-repo/dataset/val/'
