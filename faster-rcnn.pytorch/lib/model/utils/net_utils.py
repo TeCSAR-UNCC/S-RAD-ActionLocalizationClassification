@@ -9,6 +9,25 @@ import cv2
 import pdb
 import random
 
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+
 def save_net(fname, net):
     import h5py
     h5f = h5py.File(fname, mode='w')
@@ -106,32 +125,6 @@ def precision_recall(tp_labels,fp_labels,fn_labels,num_class):
     ap.append(compute_ap(recall[::-1], precision[::-1]))
     #print("Both positives and gt are zero")
   return ap
-
-'''def compute_ap(recall, precision):
-    """ Compute the average precision, given the recall and precision curves.
-    Code originally from https://github.com/rbgirshick/py-faster-rcnn.
-    # Arguments
-        recall:    The recall curve (list).
-        precision: The precision curve (list).
-    # Returns
-        The average precision as computed in py-faster-rcnn.
-    """
-    # correct AP calculation
-    # first append sentinel values at the end
-    mrec = np.concatenate(([0.0], recall, [1.0]))
-    mpre = np.concatenate(([0.0], precision, [0.0]))
-
-    # compute the precision envelope
-    for i in range(mpre.size - 1, 0, -1):
-        mpre[i - 1] = np.maximum(mpre[i - 1], mpre[i])
-
-    # to calculate area under PR curve, look for points
-    # where X axis (recall) changes value
-    i = np.where(mrec[1:] != mrec[:-1])[0]
-
-    # and sum (\Delta recall) * prec
-    ap = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])
-    return ap'''
     
 def compute_ap(recall, precision):
     """Compute Average Precision according to the definition in VOCdevkit.
@@ -174,7 +167,8 @@ def compute_ap(recall, precision):
     # Preprocess precision to be a non-decreasing array
     for i in range(len(precision) - 2, -1, -1):
         precision[i] = np.maximum(precision[i], precision[i + 1])
-
+    print('precision: {}'.format(precision))
+    print('recall: {}'.format(recall))
     indices = np.where(recall[1:] != recall[:-1])[0] + 1
     average_precision = np.sum(
         (recall[indices] - recall[indices - 1]) * precision[indices]

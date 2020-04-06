@@ -35,10 +35,10 @@ multiprocessing.set_start_method('spawn', True)
 from model.utils.config import cfg, cfg_from_file, cfg_from_list, get_output_dir
 from model.utils.net_utils import weights_normal_init, save_net, load_net, \
       adjust_learning_rate, save_checkpoint, clip_gradient,precision_recall, \
-        compute_ap,vis_detections,gt_visuals
+        compute_ap,vis_detections,gt_visuals,AverageMeter
 from model.rpn.proposal_target_layer_cascade import _ProposalTargetLayer
 
-from model.nms.nms import soft_nms,py_cpu_nms
+from model.nms.nms import soft_nms,py_cpu_nms,avg_iou
 
 from model.roi_layers import nms
 from model.rpn.bbox_transform import bbox_transform_inv,cpu_bbox_overlaps_batch, \
@@ -223,7 +223,7 @@ def main():
                        ToTorchFormatTensor(div=1),
                        normalize]),dense_sample =args.dense_sample,uniform_sample=args.uniform_sample,
                  random_sample = args.random_sample,strided_sample = args.strided_sample),
-        batch_size=args.batch_size, shuffle=True,
+        batch_size=args.batch_size, shuffle=False,
         num_workers=args.num_workers, pin_memory=True,
         drop_last=True)  # prevent something not % n_GPU
   
@@ -235,7 +235,7 @@ def main():
                        ToTorchFormatTensor(div=1),
                        normalize]),dense_sample =args.dense_sample,uniform_sample=args.uniform_sample,
                  random_sample = args.random_sample,strided_sample = args.strided_sample),
-        batch_size=1, shuffle=False,
+        batch_size=args.batch_size, shuffle=False,
         num_workers=args.num_workers, pin_memory=True) 
   if args.cuda:
     cfg.CUDA = True
@@ -350,7 +350,7 @@ def main():
     mGPUs = False
   
   train_iters_per_epoch = int(len(train_loader.dataset) / args.batch_size)
-  val_iters_per_epoch = int(len(val_loader.dataset))
+  val_iters_per_epoch = int(len(val_loader.dataset) / args.batch_size)
   session = args.session
 
   if args.use_tfboard:
@@ -359,7 +359,7 @@ def main():
   
   if args.evaluate:
     validate(val_loader, fasterRCNN,0,val_iters_per_epoch,num_class, \
-            args.num_segments,vis,session)
+            args.num_segments,vis,session,args.batch_size)
     
   for epoch in range(args.start_epoch, args.max_epochs + 1):
     
@@ -372,8 +372,8 @@ def main():
     
     # evaluate on validation set
     if epoch % 4 == 0:
-      validate(val_loader, fasterRCNN,epoch,val_iters_per_epoch,num_class, \
-              args.num_segments,vis,session)
+        validate(val_loader, fasterRCNN,epoch,val_iters_per_epoch,num_class, \
+              args.num_segments,vis,session,args.batch_size)
 
 def train(train_loader,fasterRCNN,lr,optimizer,epoch,num_class,train_iters_per_epoch,session,mGPUs,logger,output_dir):
        
@@ -395,26 +395,32 @@ def train(train_loader,fasterRCNN,lr,optimizer,epoch,num_class,train_iters_per_e
     num_boxes = Variable(num_boxes)
     gt_boxes = Variable(gt_boxes)
 
+
+    batch_time = AverageMeter()
+    data_time = AverageMeter()
+
     # setting to train mode
     fasterRCNN.train()
     #loss = 0
     loss_temp = 0
+    end = time.time()
     data_iter = iter(train_loader)
     for step in range (train_iters_per_epoch):
         data = next(data_iter)
-        
+        # measure data loading time
+        data_time.update(time.time() - end)
         with torch.no_grad():
-              im_data.resize_(data[0].size()).copy_(data[0])
-              gt_boxes.resize_(data[1].size()).copy_(data[1])
-              num_boxes.resize_(data[2].size()).copy_(data[2])
-              im_info.resize_(data[3].size()).copy_(data[3])
-              imgsize1 = im_data.size(3)
-              imgsize2 = im_data.size(4)
-              channel = im_data.size(2)
-              im_data = im_data.view(-1,channel,imgsize1,imgsize2)
-              im_info = im_info.view(-1,3)
-              gt_boxes= gt_boxes.view(-1,15,num_class+4)
-              num_boxes = num_boxes.view(-1)
+          im_data.resize_(data[0].size()).copy_(data[0])
+          gt_boxes.resize_(data[1].size()).copy_(data[1])
+          num_boxes.resize_(data[2].size()).copy_(data[2])
+          im_info.resize_(data[3].size()).copy_(data[3])
+        imgsize1 = im_data.size(3)
+        imgsize2 = im_data.size(4)
+        channel = im_data.size(2)
+        im_data = im_data.view(-1,channel,imgsize1,imgsize2)
+        im_info = im_info.view(-1,3)
+        gt_boxes= gt_boxes.view(-1,15,num_class+4)
+        num_boxes = num_boxes.view(-1)
         
         fasterRCNN.zero_grad()
         # compute output
@@ -453,10 +459,17 @@ def train(train_loader,fasterRCNN,lr,optimizer,epoch,num_class,train_iters_per_e
           loss_rcnn_box = RCNN_loss_bbox.item()
           fg_cnt = torch.sum(rois_label.data.ne(0))
           bg_cnt = rois_label.data.numel() - fg_cnt
+        
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
 
         print("[session %d][epoch %2d][iter %4d/%4d] loss: %.4f, lr: %.2e" \
                                 % (session, epoch, step, train_iters_per_epoch, loss, lr))
-    
+        output = ('\t\t\t Batch_Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                      'Data_Time {data_time.val:.3f} ({data_time.avg:.3f})\t'
+                      .format(batch_time=batch_time,data_time=data_time))
+        print(output)
         print("\t\t\tfg/bg=(%d/%d)" % (fg_cnt, bg_cnt))
         print("\t\t\trpn_cls: %.4f, rpn_box: %.4f, rcnn_cls: %.4f, rcnn_box %.4f" \
                       % (loss_rpn_cls, loss_rpn_box, loss_rcnn_cls, loss_rcnn_box))
@@ -484,7 +497,7 @@ def train(train_loader,fasterRCNN,lr,optimizer,epoch,num_class,train_iters_per_e
         
 
 def validate(val_loader,fasterRCNN,epoch,val_iters_per_epoch,
-              num_class,num_segments,vis,session):
+              num_class,num_segments,vis,session,batch_size):
     
     # initilize the tensor holder here.
     im_data = torch.FloatTensor(1)
@@ -506,96 +519,120 @@ def validate(val_loader,fasterRCNN,epoch,val_iters_per_epoch,
     gt_boxes = Variable(gt_boxes)
     data_iter = iter(val_loader)
 
-    fasterRCNN.eval()
-    all_boxes = [[[[]for _ in range(num_class)] for _ in range(num_segments)]
-               for _ in range(val_iters_per_epoch)]
+    batch_time = AverageMeter()
 
+    fasterRCNN.eval()
+    all_boxes = [[[[]for _ in range(num_class)] for _ in range(batch_size *num_segments)]
+               for _ in range(val_iters_per_epoch)]
+    #limit the number of proposal per image across all the class
     max_per_image = 15
     bins = 9 
+    score_threshold = 0.1
     tp_labels = np.zeros((num_class,bins),dtype=int)
     fp_labels = np.zeros((num_class,bins),dtype=int)
     fn_labels = np.zeros((num_class,bins),dtype=int)
     all_pred_box,all_gtbb,all_gtlabels,all_scores=[],[],[],[]
-
-    for step in range (val_iters_per_epoch):
-      data = next(data_iter)
-      with torch.no_grad():
-              im_data.resize_(data[0].size()).copy_(data[0])
-              gt_boxes.resize_(data[1].size()).copy_(data[1])
-              num_boxes.resize_(data[2].size()).copy_(data[2])
-              im_info.resize_(data[3].size()).copy_(data[3])
-              imgsize1 = im_data.size(3)
-              imgsize2 = im_data.size(4)
-              channel = im_data.size(2)
-              im_data = im_data.view(-1,channel,imgsize1,imgsize2)
-              im_info = im_info.view(-1,3)
-              gt_boxes= gt_boxes.view(-1,15,num_class+4)
-              num_boxes = num_boxes.view(-1)
-              img_path = data[4]
-      rois, cls_prob, bbox_pred, \
-      rpn_loss_cls, rpn_loss_box, \
-      RCNN_loss_cls, RCNN_loss_bbox, \
-      rois_label = fasterRCNN(im_data, im_info, gt_boxes, num_boxes)
+    end = time.time()
+    with torch.no_grad():
+      for step in range (val_iters_per_epoch):
+        data = next(data_iter)
+        im_data.resize_(data[0].size()).copy_(data[0])
+        gt_boxes.resize_(data[1].size()).copy_(data[1])
+        num_boxes.resize_(data[2].size()).copy_(data[2])
+        im_info.resize_(data[3].size()).copy_(data[3])
+        imgsize1 = im_data.size(3)
+        imgsize2 = im_data.size(4)
+        channel = im_data.size(2)
+        im_data = im_data.view(-1,channel,imgsize1,imgsize2)
+        im_info = im_info.view(-1,3)
+        gt_boxes= gt_boxes.view(-1,15,num_class+4)
+        num_boxes = num_boxes.view(-1)
+        img_path = data[4]
+        rois, cls_prob, bbox_pred = fasterRCNN(im_data, im_info, gt_boxes, num_boxes)
       
-      #calculate the scores and boxes
-      scores = cls_prob.data
-      boxes = rois.data[:, :, 1:5]
-      batch_size = rois.shape[0]
-      box_deltas = bbox_pred.data
-      box_deltas = box_deltas.view(-1, 4) * torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_STDS).cuda() \
+
+      # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+       #calculate the scores and boxes
+        scores = cls_prob.data
+        boxes = rois.data[:, :, 1:5]
+        batch_size = rois.shape[0]
+        box_deltas = bbox_pred.data
+        box_deltas = box_deltas.view(-1, 4) * torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_STDS).cuda() \
                            + torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_MEANS).cuda()
-      box_deltas = box_deltas.view(batch_size, -1, 4 * num_class)
-      pred_boxes = bbox_transform_inv(boxes, box_deltas, 8)
-      pred_boxes = clip_boxes(pred_boxes, im_info.data, 8)   
+        box_deltas = box_deltas.view(batch_size, -1, 4 * num_class)
+       #transforms the image to x1,y1,x2,y2, format and clips the coord to images
+        pred_boxes = bbox_transform_inv(boxes, box_deltas, 8)
+        pred_boxes = clip_boxes(pred_boxes, im_info.data, 8)   
 
-      #convert the prediction boxes and gt_boxes to the image size
-      gtbb = gt_boxes[:,:,0:4]
-      gtlabels = gt_boxes[:,:,4:]
-      pred_boxes /= data[3][0][1][2].item()
-      gtbb /= data[3][0][1][2].item()
+       #convert the prediction boxes and gt_boxes to the image size
+        gtbb = gt_boxes[:,:,0:4]
+        gtlabels = gt_boxes[:,:,4:]
+        pred_boxes /= data[3][0][1][2].item()
+        gtbb /= data[3][0][1][2].item()
       
-      #move the groudtruth to cpu
-      gtbb = gtbb.cpu().numpy()
-      gtlabels = gtlabels.cpu().numpy()
+       #move the groudtruth to cpu
+        gtbb = gtbb.cpu().numpy()
+        gtlabels = gtlabels.cpu().numpy()
 
-      #calculate the predictions for each class in an image
-      for image in range(num_segments):
-        for class_id in range(1,num_class):
-        
-         inds = torch.nonzero(scores[image,:,class_id]).view(-1)
+       #calculate the predictions for each class in an image
+        for image in range(pred_boxes.shape[0]):
+          for class_id in range(1,num_class):
+           inds = torch.nonzero(scores[image,:,class_id]>score_threshold).view(-1)
          # if there is det
-         if inds.numel() > 0:
-            cls_scores = scores[image,inds,class_id]
-            _, order = torch.sort(cls_scores, 0, True)
-            cls_boxes = pred_boxes[image,inds, class_id * 4:(class_id + 1) * 4]
-            cls_dets = torch.cat((cls_boxes, cls_scores.unsqueeze(1)), 1)
-            cls_dets = cls_dets[order,:]
-            keep = nms(cls_boxes[order, :], cls_scores[order], cfg.TEST.NMS)
-            cls_dets = cls_dets[keep.view(-1)]  
-            all_boxes[step][image][class_id] = cls_dets.cpu().numpy()
+           if inds.numel() > 0:
+             cls_scores = scores[image,inds,class_id]
+             _, order = torch.sort(cls_scores, 0, True)
+             cls_boxes = pred_boxes[image,inds, class_id * 4:(class_id + 1) * 4]
+             cls_dets = torch.cat((cls_boxes, cls_scores.unsqueeze(1)), 1)
+             cls_dets = cls_dets[order,:]
+             keep = nms(cls_boxes[order, :], cls_scores[order],cfg.TEST.NMS)
+             cls_dets = cls_dets[keep.view(-1)]  
+             all_boxes[step][image][class_id] = cls_dets.cpu().numpy()
 
-        if max_per_image > 0:
-          image_scores = np.hstack([all_boxes[step][image][class_id][:, -1]
-                                    for class_id in range(1, num_class)])
-          if len(image_scores) > max_per_image:
+          if max_per_image > 0:
+            image_scores = []
+            image_det = []
+            for class_id in range(1,num_class):
+             if len(all_boxes[step][image][class_id]) !=0:
+              #stack the scores to get the number of proposals in an image
+               sc = ([all_boxes[step][image][class_id][:, -1]])
+               image_scores=np.append(image_scores,sc)
+              
+            if len(image_scores) > max_per_image:
+            #take the image threshold value taking 15th entry  
               image_thresh = np.sort(image_scores)[-max_per_image]
               for class_id in range(1, num_class):
+                if len(all_boxes[step][image][class_id]) > 0:
                   keep = np.where(all_boxes[step][image][class_id][:, -1] >= image_thresh)[0]
                   all_boxes[step][image][class_id] = all_boxes[step][image][class_id][keep, :]
+                else :
+                  all_boxes[step][image][class_id] = []
+         #if all_boxes[step][image].any()  
+          det = np.asarray(all_boxes[step][image]) 
+          if det.size > 0:
+            all_boxes[step][image] = avg_iou(all_boxes[step][image],0.7)
         
-        #vis here
-
-        #calculate tp_fp_fn
-        compute_tp_fp(all_boxes[step][image],gtlabels[image],gtbb[image], \
+          #calculate tp_fp_fn
+          compute_tp_fp(all_boxes[step][image],gtlabels[image],gtbb[image], \
                       num_class,tp_labels,fp_labels,fn_labels,bins)
+        output = ('Test: [{0}/{1}]\t'
+                'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                .format(step,(val_iters_per_epoch), batch_time=batch_time))
+        print(output)
+     
     print(' completed step:{}'.format(step))
+    print('tp_labels: {}'.format(tp_labels))
+    print('fp_labels: {}'.format(fp_labels))
+    print('fn_labels: {}'.format(fn_labels))
     ap = precision_recall(tp_labels,fp_labels,fn_labels,num_class)
     for n in range(1,num_class):
-      for key, v in activity2id.items():
-        if v == n :
-          print(f"Class '{n}' ({key}) - AveragePrecision: {ap[n-1]}")
+        for key, v in activity2id.items():
+          if v == n :
+            print(f"Class '{n}' ({key}) - AveragePrecision: {ap[n-1]}")
               
-    #print the mean average precision      
+      #print the mean average precision      
     print(f"mAP for epoch [{epoch}]: {mean(ap)}")
 
 def compute_tp_fp(all_boxes,gtlabels,gtbb,num_class,tp_labels,fp_labels,fn_labels,bins):
@@ -615,29 +652,32 @@ def compute_tp_fp(all_boxes,gtlabels,gtbb,num_class,tp_labels,fp_labels,fn_label
     index=np.unique(np.nonzero(gtbb)[0])
     gtbox = gtbb[index,:]       #[gt,4]
     gtlabel = gtlabels[index,:] #[gt,40]
-    
+    all_boxes = np.asarray(all_boxes)
     
 
     # compute tp fp and fn for all class in that image 
-    for class_id in range(1,num_class):
+    #change---------------
+    #for class_id in range(1,num_class):
 
       #keep track of propposal and gt
-      is_gt_detected =[] 
-      is_proposal_labeled =[]
-
-      all_detectbb = all_boxes[class_id]
-      pred_bb = all_detectbb[:,:4]
-      pred_label = all_detectbb[:,4:]
-      labels = gtlabel[:,class_id]
-
-      num_boxes_per_img = gtbox.shape[0]
-      num_proposal = pred_bb.shape[0]
+    is_gt_detected =[] 
+    is_proposal_labeled =[]
       
-      if all_detectbb.any() !=0:
+      #get the detections and groudtruths for each class
+      #all_detectbb = all_boxes[class_id]
+    pred_bb = all_boxes[:,:4]
+    pred_label = all_boxes[:,4:]
+      #labels = gtlabel[:,class_id]
+      
+      #variables for the match table
+    num_boxes_per_img = gtbox.shape[0]
+    num_proposal = pred_bb.shape[0]
+      
+      #check if there is a detection for that class
+    if all_boxes.any() !=0:
        overlaps = cpu_bbox_overlaps(pred_bb, gtbox)
-       #num_boxes_per_img = gtbox.shape[0]
-       #num_proposal = pred_bb.shape[0]
-
+       
+       #if there is a detection and gt 
        if (num_proposal>0) and (num_boxes_per_img !=0):
             match_table = np.zeros((num_proposal,num_boxes_per_img),dtype=float)
             for p in range(num_proposal):
@@ -649,26 +689,28 @@ def compute_tp_fp(all_boxes,gtlabels,gtbb,num_class,tp_labels,fp_labels,fn_label
             while best_match >= 0.5:
                 match_pos = np.where(match_table == best_match)
                 p = match_pos[0][0]
-                detect_label = pred_label[p]
+                detectclass = pred_label[p]
                 g = match_pos[1][0]
-                gt_label = labels[g]
+                gtclass = gtlabel[g]
                 is_gt_detected += [g]
                 is_proposal_labeled+=[p]
-
-                if gt_label == 1:
-                #if there is groundtruth and pred_score matches with the bin = tp
-                 for bin_id in range(bins):
-                  bin_value=  bin_dict[bin_id](detect_label)
-                  if bin_value == 1 : 
-                    tp_labels[class_id][bin_id] += 1
+                for class_id in range(1,num_class):
+                  gt_label = gtclass[class_id]
+                  detect_label = detectclass[class_id]
+                  if gt_label == 1:
+                  #if there is groundtruth and pred_score matches with the bin = tp
+                   for bin_id in range(bins):
+                    bin_value=  bin_dict[bin_id](detect_label)
+                    if bin_value == 1 : 
+                     tp_labels[class_id][bin_id] += 1
                 
-                  else: #there is a gt but pred_scores doesnt match with bin = fn
-                    fn_labels[class_id][bin_id] +=1
+                    else: #there is a gt but pred_scores doesnt match with bin = fn
+                     fn_labels[class_id][bin_id] +=1
                 
-                else: #no gt but pred_scores matches bin = fp
-                  for bin_id in range(bins):
-                   bin_value=  bin_dict[bin_id](detect_label)
-                   if bin_value == 1 : 
+                  else: #no gt but pred_scores matches bin = fp
+                   for bin_id in range(bins):
+                    bin_value=  bin_dict[bin_id](detect_label)
+                    if bin_value == 1 : 
                       fp_labels[class_id][bin_id] +=1 
                 
                 match_table[p,:] = np.zeros(match_table[p,:].shape)
@@ -679,28 +721,30 @@ def compute_tp_fp(all_boxes,gtlabels,gtbb,num_class,tp_labels,fp_labels,fn_label
             #count the left out proposals as fp      
             for k in range(num_proposal): 
              if k not in is_proposal_labeled:
-               for bin_id in range(bins):
-                   detect_label = pred_label[k]
-                   bin_value=  bin_dict[bin_id](detect_label)
-                   if bin_value == 1 : 
-                      fp_labels[class_id][bin_id] +=1    
+               for class_id in range(1,num_class):
+                  detect_label = pred_label[k][class_id]
+                  for bin_id in range(bins):
+                      bin_value=  bin_dict[bin_id](detect_label)
+                      if bin_value == 1 : 
+                         fp_labels[class_id][bin_id] +=1   
+                   
             
            
             #count the left out groundtruths as fn
             for gt in range(num_boxes_per_img):
                 if gt not in is_gt_detected:
-                  if labels[gt] == 1:
-                    fn_labels[class_id,:] += 1   
-       
-      else:
-       if labels.any() == 0:
-          tp_labels[class_id] += 0
-          fp_labels[class_id] += 0
-          fn_labels[class_id] += 0
-       else:
+                  for class_id in range(1,num_class):
+                    ground_label = gtlabel[gt][class_id]
+                    if ground_label == 1:                    
+                      fn_labels[class_id,:] += 1   
+      #for no detections for that class  
+    else:
+       if gtlabel.any() != 0:
         for gt in range(num_boxes_per_img):
-         if labels[gt] == 1:
-           fn_labels[class_id,:] += 1 
+          for class_id in range(1,num_class):
+                    ground_label = gtlabel[gt][class_id]
+                    if ground_label == 1:                    
+                      fn_labels[class_id,:] += 1  
 
 
               
