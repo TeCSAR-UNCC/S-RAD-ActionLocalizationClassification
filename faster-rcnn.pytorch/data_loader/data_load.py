@@ -25,9 +25,7 @@ class VideoRecord(object):
     def num_frames(self):
         return int(self._data[1])
 
-    '''@property
-    def label(self):
-        return int(self._data[2])'''
+    
 
 activity2id = {
     "BG": 0,  # background
@@ -72,26 +70,22 @@ activity2id = {
     "Drop" : 39}
 
 
-class Action_dataset(data.Dataset):
-    def __init__(self, train_path,num_class,list_file,
-                 num_segments=3, modality='RGB',
-                 transform=None,random_shift=True, test_mode=False,
-                 dense_sample=False,uniform_sample=True,
-                 random_sample=False,strided_sample=False, input_size = 600):
+class VIRAT_dataset(data.Dataset):
+    def __init__(self, train_path,num_class,cfg,list_file,
+                 num_segments=3,input_size = 600,transform=None,dense_sample=False,
+                 uniform_sample=True,random_sample=False,strided_sample=False):
                  
         self.train_path = train_path
         self.num_class = num_class
         self.list_file = list_file
         self.num_segments = num_segments
-        self.modality = modality
         self.transform = transform
-        self.random_shift = random_shift
-        self.test_mode = test_mode
         self.new_size = input_size
         self.dense_sample = dense_sample
         self.uniform_sample = uniform_sample
         self.strided_sample = strided_sample
         self.random_sample = random_sample
+        self.cfg = cfg
         self._parse_list()
 
     def _parse_list(self):
@@ -128,38 +122,25 @@ class Action_dataset(data.Dataset):
             offsets = np.zeros((self.num_segments,))    
             return offsets  
 
-    def _load_image(self, directory, filename):
-        if self.modality == 'RGB' or self.modality == 'RGBDiff':
-            try:
-                return [Image.open(os.path.join(directory, filename)).convert('RGB')]
-            except Exception:
-                print('error loading image:', os.path.join(directory, filename))
-                return [Image.open(os.path.join(directory, filename)).convert('RGB')]   
-    
-    
-    def get(self,index,record, indices,new_size):
+    def get(self,index,record, indices):
       
       sequence_path = str(record.path).strip().split('/frames/')[0]
       label = list()
       bbox = list()
       images = list()
       img_path = list()
-      gt = np.zeros((len(indices),15,(self.num_class + 4)),
+      gt = np.zeros((len(indices),self.cfg.MAX_NUM_GT_BOXES,(self.num_class + 4)),
                   dtype=np.float32)
       num_boxes = np.zeros((self.num_segments),dtype=np.float32)
       im_info = np.zeros((self.num_segments,3),dtype=np.float32)
       npy_file = (os.path.join(str(sequence_path),'ground_truth.npy'))
       data = np.load(npy_file)
-          
-      with open('ground.txt', 'w') as f:
-                for n in data:
-                    f.write("%s \n" % n)
-                frame = data[0][0]
-                j =0 
-                for seg_ind in indices: #iterate through every image
+      frame = data[0][0]
+      j =0 
+      for seg_ind in indices: #iterate through every image
                     count = 0
                     
-                    bboxes = np.zeros((15,(self.num_class + 4)),dtype= float)
+                    bboxes = np.zeros((self.cfg.MAX_NUM_GT_BOXES,(self.num_class + 4)),dtype= float)
                     p = int(seg_ind) + int(frame)
                     image_path = os.path.join(record.path, '{:06d}.jpg'.format(p))
                     im = imread(image_path)
@@ -168,10 +149,10 @@ class Action_dataset(data.Dataset):
                     height,width,_= im.shape #h=1080,w=1920
                     im_size_min= min(height,width)
                     im_size_max = max(height,width)
-                    im_scale = float(new_size) / float(im_size_min)
+                    im_scale = float(self.new_size) / float(im_size_min)
                     im = cv2.resize(im, None, None, fx=im_scale, fy=im_scale,
                     interpolation=cv2.INTER_LINEAR)
-                    im_info[j,:]=new_size,len(im[2]),im_scale
+                    im_info[j,:]=self.new_size,len(im[2]),im_scale
                     img_path.append(image_path)
                     for i in data:
                         if i[0] == p:
@@ -205,7 +186,7 @@ class Action_dataset(data.Dataset):
         #self.yaml_file(index)
         segment_indices = self._sample_indices(record)
         segment_indices = np.sort(segment_indices)
-        return self.get( index, record, segment_indices,self.new_size)
+        return self.get( index, record, segment_indices)
                
     def __len__(self):
         return (len(self.video_list))

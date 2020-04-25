@@ -17,15 +17,16 @@ from model.roi_layers import ROIAlign, ROIPool
 from model.rpn.proposal_target_layer_cascade import _ProposalTargetLayer
 import time
 import pdb
-from model.utils.net_utils import _smooth_l1_loss, _crop_pool_layer, _affine_grid_gen, _affine_theta
+from model.utils.net_utils import _smooth_l1_loss, _crop_pool_layer,focal_loss, _affine_grid_gen, _affine_theta
 
 class _fasterRCNN(nn.Module):
     """ faster RCNN """
-    def __init__(self, classes, class_agnostic):
+    def __init__(self, classes, class_agnostic,loss_type):
         super(_fasterRCNN, self).__init__()
         self.classes = classes
         self.n_classes = classes
         self.class_agnostic = class_agnostic
+        self.loss_type = loss_type
         # loss
         self.RCNN_loss_cls = 0
         self.RCNN_loss_bbox = 0
@@ -110,7 +111,12 @@ class _fasterRCNN(nn.Module):
         if self.training:
             # classification loss
             #rois_label = rois_label.type_as(cls_score)
-            RCNN_loss_cls = F.binary_cross_entropy_with_logits(cls_score, rois_label)
+            if self.loss_type == "focal":
+               gamma = 5.0
+               weights = 0.25
+               RCNN_loss_cls = focal_loss(rois_label, cls_score, weights, gamma)
+            elif self.loss_type == "sigmoid":
+               RCNN_loss_cls = F.binary_cross_entropy_with_logits(cls_score, rois_label)
 
             # bounding box regression L1 loss
             RCNN_loss_bbox = _smooth_l1_loss(bbox_pred, rois_target, rois_inside_ws, rois_outside_ws)

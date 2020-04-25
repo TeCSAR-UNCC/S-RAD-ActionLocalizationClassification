@@ -62,11 +62,26 @@ def return_virat(modality):
         raise NotImplementedError('no such modality:' + modality)
     return filename_categories, filename_imglist_train, filename_imglist_val,filename_imglist_test,train_data,val_data,test_data
 
+def return_ava(modality):
+    filename_categories = 60
+    if modality == 'RGB':
+        train_data = ROOT_DATASET + 'VIRAT/actev-data-repo/dataset/train/'
+        val_data = ROOT_DATASET + 'VIRAT/actev-data-repo/dataset/val/'
+        test_data = ROOT_DATASET + 'VIRAT/actev-data-repo/dataset/test/'
+        filename_imglist_train = '/home/malar/git_sam/Action-Proposal-Networks/faster-rcnn.pytorch/train_list.txt'
+        filename_imglist_val = '/home/malar/git_sam/Action-Proposal-Networks/faster-rcnn.pytorch/val_list.txt'
+        filename_imglist_test = '/home/malar/git_sam/Action-Proposal-Networks/faster-rcnn.pytorch/test_list.txt'
+        #prefix = 'img_{:05d}.jpg'
+    else:
+        raise NotImplementedError('no such modality:' + modality)
+    return filename_categories, filename_imglist_train, filename_imglist_val,filename_imglist_test,train_data,val_data,test_data
+
 
 
 def return_dataset(dataset, modality):
     dict_single = {'ucf101': return_ucf101, 'hmdb51': return_hmdb51,
-                   'kinetics': return_kinetics,'virat': return_virat }
+                   'kinetics': return_kinetics,'virat': return_virat,
+                   'ava':return_ava }
     if dataset in dict_single:
         file_categories, file_imglist_train, file_imglist_val,file_imglist_test,train_data,val_data,test_data = dict_single[dataset](modality)
     else:

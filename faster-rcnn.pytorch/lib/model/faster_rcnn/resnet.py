@@ -242,7 +242,7 @@ def resnet152(pretrained=False):
 class resnet(_fasterRCNN):
   def __init__(self, classes, modality = 'RGB',num_layers=101,base_model ='resnet50',
                n_segments =8,n_div =8 , place = 'blockres',temporal_pool = 'false',
-               pretrain = 'imagenet',shift = 'true',class_agnostic = 'false'):
+               pretrain = 'imagenet',shift = 'true',class_agnostic = 'false',loss_type = 'sigmoid'):
     self.model_path = 'data/pretrained_model/resnet101_caffe.pth'
     self.dout_base_model = 1024
     self.pretrain = pretrain
@@ -253,8 +253,9 @@ class resnet(_fasterRCNN):
     self.temporal_pool=temporal_pool
     self.class_agnostic = class_agnostic
     self.modality = modality
+    self.loss_type = loss_type
 
-    _fasterRCNN.__init__(self, classes, class_agnostic)
+    _fasterRCNN.__init__(self, classes, class_agnostic,loss_type)
 
   def _init_modules(self):
     resnet = _prepare_base_model(self)

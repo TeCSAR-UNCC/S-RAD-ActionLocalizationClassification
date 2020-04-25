@@ -27,6 +27,7 @@ from statistics import mean
 from torch.utils.data.sampler import Sampler
 from data_loader.data_load import Action_dataset
 from dataset_config import dataset
+from dataset_config.ava_dataset import Ava
 from dataset_config.transforms import *
 from tensorboardX import SummaryWriter
 
@@ -119,6 +120,11 @@ def parse_args():
   parser.add_argument('--strided_sample', default=False, action="store_true", 
   help='use dense sample for video dataset')
 
+#loss type
+  parser.add_argument('--loss_type',type=str,default='sigmoid',help="""\
+      Loss type for training the network ('softmax', 'sigmoid', 'focal').\
+      """)
+
 # config optimization
   parser.add_argument('--o', dest='optimizer',
                       help='training optimizer',
@@ -173,15 +179,18 @@ def main():
   print('Called with args:')
   print(args)
 
+  best_meanap =0
+  meanap = 0
   if args.dataset == "virat":args.set_cfgs = ['ANCHOR_SCALES', '[1, 2, 3]', 'ANCHOR_RATIOS', 
       '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '20']
-
-  args.store_name = '_'.join(
-        ['Action_proposal', args.dataset, args.modality, args.net, 'segment%d' % args.num_segments,
-         'e{}'.format(args.max_epochs)])
-  if args.pretrain != 'imagenet':
-        args.store_name += '_{}'.format(args.pretrain)
-  print('storing name: ' + args.store_name)
+  if args.dataset == "ava":args.set_cfgs = ['ANCHOR_SCALES', '[2,4,6]', 'ANCHOR_RATIOS', 
+      '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '20']
+  #args.store_name = '_'.join(
+  #      ['Action_proposal', args.dataset, args.modality, args.net, 'segment%d' % args.num_segments,
+  #       'e{}'.format(args.max_epochs)])
+  #if args.pretrain != 'imagenet':
+  #      args.store_name += '_{}'.format(args.pretrain)
+  #print('storing name: ' + args.store_name)
   
   num_class, args.train_list, args.val_list,args.test_list, train_path, val_path, test_path= dataset.return_dataset(args.dataset,args.modality)
   args.cfg_file = "cfgs/{}_ls.yml".format(args.net) if args.large_scale else "/home/malar/git_sam/Action-Proposal-Networks/faster-rcnn.pytorch/cfgs/{}.yml".format(args.net)
@@ -215,7 +224,8 @@ def main():
   input_std = [0.229, 0.224, 0.225]
   normalize = GroupNormalize(input_mean, input_std)
 
-  train_loader = torch.utils.data.DataLoader(
+  if args.dataset == 'virat':
+    train_loader = torch.utils.data.DataLoader(
         Action_dataset(train_path,num_class, args.train_list, num_segments=args.num_segments,
                    modality=args.modality,random_shift=True, test_mode=False,
                    input_size = input_size,
@@ -223,11 +233,11 @@ def main():
                        ToTorchFormatTensor(div=1),
                        normalize]),dense_sample =args.dense_sample,uniform_sample=args.uniform_sample,
                  random_sample = args.random_sample,strided_sample = args.strided_sample),
-        batch_size=args.batch_size, shuffle=False,
+        batch_size=args.batch_size, shuffle=True,
         num_workers=args.num_workers, pin_memory=True,
         drop_last=True)  # prevent something not % n_GPU
   
-  val_loader = torch.utils.data.DataLoader(
+    val_loader = torch.utils.data.DataLoader(
         Action_dataset(val_path, num_class,args.val_list, num_segments=args.num_segments,
                    modality=args.modality,random_shift=True, test_mode=False,
                    input_size = input_size,
@@ -237,6 +247,20 @@ def main():
                  random_sample = args.random_sample,strided_sample = args.strided_sample),
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.num_workers, pin_memory=True) 
+
+    test_loader = torch.utils.data.DataLoader(
+        Action_dataset(test_path,num_class, args.test_list, num_segments=args.num_segments,
+                   modality=args.modality,random_shift=False, test_mode=True,
+                   input_size = input_size,
+                   transform=torchvision.transforms.Compose([ 
+                       ToTorchFormatTensor(div=1),
+                       normalize]),dense_sample =False,uniform_sample=False,
+                 random_sample = False,strided_sample = False),
+        batch_size=args.batch_size, shuffle=False,
+        num_workers=args.num_workers, pin_memory=True)
+  if args.dataset == 'ava':
+    train_loader = torch.utils.data.DataLoader(Ava(cfg,split = 'train'))
+          # prevent something not % n_GPU
   if args.cuda:
     cfg.CUDA = True
 
@@ -250,7 +274,7 @@ def main():
    fasterRCNN = resnet(num_class,modality = 'RGB',num_layers =50, base_model ='resnet50', n_segments =8,
                n_div =args.shift_div , place = args.shift_place,temporal_pool = args.temporal_pool,
                pretrain = args.pretrain,shift = args.shift,
-               class_agnostic=args.class_agnostic)
+               class_agnostic=args.class_agnostic,loss_type =args.loss_type)
   elif args.net == 'res152':
    fasterRCNN = resnet(imdb.classes, 152, pretrained=True, class_agnostic=args.class_agnostic)
   else:
@@ -261,6 +285,7 @@ def main():
 
   lr = cfg.TRAIN.LEARNING_RATE
   lr = args.lr
+  BASE_LEARNING_RATE = lr
   
   params = []
   for key, value in dict(fasterRCNN.named_parameters()).items():
@@ -351,28 +376,56 @@ def main():
   
   train_iters_per_epoch = int(len(train_loader.dataset) / args.batch_size)
   val_iters_per_epoch = int(len(val_loader.dataset) / args.batch_size)
+  test_iters_per_epoch = int(len(test_loader.dataset) / args.batch_size)
   session = args.session
+  
+  LR_SCHEDULE = [    # (multiplier, epoch to start) tuples
+    (1.0, 5)]
 
   if args.use_tfboard:
     from tensorboardX import SummaryWriter
     logger = SummaryWriter("logs")
   
   if args.evaluate:
-    validate(val_loader, fasterRCNN,0,val_iters_per_epoch,num_class, \
+    meanprec = validate(val_loader, fasterRCNN,0,val_iters_per_epoch,num_class, \
             args.num_segments,vis,session,args.batch_size)
     
   for epoch in range(args.start_epoch, args.max_epochs + 1):
     
+    
+    
+    '''warmup_lr_multiplier, warmup_end_epoch = LR_SCHEDULE[0]
+    
+    if epoch <= warmup_end_epoch :
+      startepoch = epoch - 1
+      warmupepoch = startepoch + float(args.batch_size) / train_iters_per_epoch
+      initial_decay = warmup_lr_multiplier * warmupepoch / warmup_end_epoch
+      lr = BASE_LEARNING_RATE * initial_decay
+      for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+    if epoch == warmup_end_epoch+1:
+      lr = BASE_LEARNING_RATE
+      for param_group in optimizer.param_groups:
+        param_group['lr'] = lr '''
+
+    
     if epoch % (args.lr_decay_step + 1) == 0:
+    #if meanap < best_meanap:
         adjust_learning_rate(optimizer, args.lr_decay_gamma)
         lr *= args.lr_decay_gamma
-
+    #best_meanap = max(best_meanap,meanap) 
     train(train_loader, fasterRCNN,lr,optimizer,
     epoch,num_class,train_iters_per_epoch,session,mGPUs,logger,output_dir)
     
     # evaluate on validation set
-    if epoch % 4 == 0:
-        validate(val_loader, fasterRCNN,epoch,val_iters_per_epoch,num_class, \
+    if epoch % 3 == 0:
+      meanap = validate(val_loader, fasterRCNN,epoch,val_iters_per_epoch,num_class, \
+              args.num_segments,vis,session,args.batch_size)
+      is_best = meanap > best_meanap
+      best_meanap = max(best_meanap,meanap)
+      print(f"best mean ap : [{best_meanap}]")
+    if epoch % 6 == 0:
+       test_ap = validate(test_loader, fasterRCNN,epoch,test_iters_per_epoch,num_class, \
               args.num_segments,vis,session,args.batch_size)
 
 def train(train_loader,fasterRCNN,lr,optimizer,epoch,num_class,train_iters_per_epoch,session,mGPUs,logger,output_dir):
@@ -405,6 +458,8 @@ def train(train_loader,fasterRCNN,lr,optimizer,epoch,num_class,train_iters_per_e
     loss_temp = 0
     end = time.time()
     data_iter = iter(train_loader)
+    optimizer.zero_grad()
+    fasterRCNN.zero_grad()
     for step in range (train_iters_per_epoch):
         data = next(data_iter)
         # measure data loading time
@@ -414,15 +469,12 @@ def train(train_loader,fasterRCNN,lr,optimizer,epoch,num_class,train_iters_per_e
           gt_boxes.resize_(data[1].size()).copy_(data[1])
           num_boxes.resize_(data[2].size()).copy_(data[2])
           im_info.resize_(data[3].size()).copy_(data[3])
-        imgsize1 = im_data.size(3)
-        imgsize2 = im_data.size(4)
-        channel = im_data.size(2)
-        im_data = im_data.view(-1,channel,imgsize1,imgsize2)
+        im_data = im_data.view(-1,im_data.size(2),im_data.size(3),im_data.size(4))
         im_info = im_info.view(-1,3)
         gt_boxes= gt_boxes.view(-1,15,num_class+4)
         num_boxes = num_boxes.view(-1)
         
-        fasterRCNN.zero_grad()
+        #fasterRCNN.zero_grad()
         # compute output
         rois, cls_prob, bbox_pred, \
         rpn_loss_cls, rpn_loss_box, \
@@ -434,16 +486,17 @@ def train(train_loader,fasterRCNN,lr,optimizer,epoch,num_class,train_iters_per_e
         loss_temp += loss.item()
          
         # backward
-        optimizer.zero_grad()
+        #normalise the loss i.e average the accumuated loss
+        loss = loss / 64                   
         loss.backward()
-        #if args.net == "vgg16":
-        #  clip_gradient(fasterRCNN, 10.)
-        optimizer.step()
 
-        #if step % args.disp_interval == 0:
-        # end = time.time()
-        if step > 0:
-          loss_temp /= (100 + 1)
+
+        if (step+1)%64 == 0:   #wait for several backward step
+          optimizer.step()     #update the model 
+          fasterRCNN.zero_grad()#Reset the gradient tensor
+
+        #if step > 0:
+        #loss_temp /= (100 + 1)
 
         if mGPUs:
           loss_rpn_cls = rpn_loss_cls.mean().item()
@@ -556,15 +609,17 @@ def validate(val_loader,fasterRCNN,epoch,val_iters_per_epoch,
         end = time.time()
        #calculate the scores and boxes
         scores = cls_prob.data
+        
         boxes = rois.data[:, :, 1:5]
-        batch_size = rois.shape[0]
+        #batch_size = rois.shape[0]
         box_deltas = bbox_pred.data
         box_deltas = box_deltas.view(-1, 4) * torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_STDS).cuda() \
                            + torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_MEANS).cuda()
-        box_deltas = box_deltas.view(batch_size, -1, 4 * num_class)
+        box_deltas = box_deltas.view(scores.shape[0], -1, 4 * num_class)
+        
        #transforms the image to x1,y1,x2,y2, format and clips the coord to images
-        pred_boxes = bbox_transform_inv(boxes, box_deltas, 8)
-        pred_boxes = clip_boxes(pred_boxes, im_info.data, 8)   
+        pred_boxes = bbox_transform_inv(boxes, box_deltas,scores.shape[0])
+        pred_boxes = clip_boxes(pred_boxes, im_info.data,scores.shape[0])   
 
        #convert the prediction boxes and gt_boxes to the image size
         gtbb = gt_boxes[:,:,0:4]
@@ -632,8 +687,9 @@ def validate(val_loader,fasterRCNN,epoch,val_iters_per_epoch,
           if v == n :
             print(f"Class '{n}' ({key}) - AveragePrecision: {ap[n-1]}")
               
-      #print the mean average precision      
+    #print the mean average precision      
     print(f"mAP for epoch [{epoch}]: {mean(ap)}")
+    return np.mean(ap)
 
 def compute_tp_fp(all_boxes,gtlabels,gtbb,num_class,tp_labels,fp_labels,fn_labels,bins):
     bin_dict = {

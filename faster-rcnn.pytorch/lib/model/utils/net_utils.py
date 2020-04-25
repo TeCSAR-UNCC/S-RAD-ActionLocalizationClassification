@@ -9,27 +9,37 @@ import cv2
 import pdb
 import random
 
+def focal_loss(labels, logits, alpha, gamma):
+    """Compute the focal loss between `logits` and the ground truth `labels`.
+    Focal loss = -alpha_t * (1-pt)^gamma * log(pt)
+    where pt is the probability of being classified to the true class.
+    pt = p (if true class), otherwise pt = 1 - p. p = sigmoid(logit).
+    Args:
+      labels: A float tensor of size [batch, num_classes].
+      logits: A float tensor of size [batch, num_classes].
+      alpha: A float tensor of size [batch_size]
+        specifying per-example weight for balanced cross entropy.
+      gamma: A float scalar modulating loss from hard and easy examples.
+    Returns:
+      focal_loss: A float32 scalar representing normalized total loss.
+    """    
+    per_entry_cross_ent = (F.binary_cross_entropy_with_logits(
+        labels, logits))
+    prediction_probabilities = torch.sigmoid(logits)
+    p_t = ((labels * prediction_probabilities) +
+           ((1 - labels) * (1 - prediction_probabilities)))
+    modulating_factor = 1.0
+    if gamma:
+      modulating_factor = torch.pow(1.0 - p_t, gamma)
+    alpha_weight_factor = 1.0
+    if alpha is not None:
+      alpha_weight_factor = (labels * alpha +
+                             (1 - labels) * (1 - alpha))
+    focal_cross_entropy_loss = (modulating_factor * alpha_weight_factor *
+                                per_entry_cross_ent)
+    return focal_cross_entropy_loss.mean() #* weights
+    
 
-class FocalLoss(nn.Module):
-    def __init__(self, alpha=1, gamma=2, logits=False, reduce=True):
-        super(FocalLoss, self).__init__()
-        self.alpha = alpha
-        self.gamma = gamma
-        self.logits = logits
-        self.reduce = reduce
-
-    def forward(self, inputs, targets):
-        if self.logits:
-            BCE_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduce=False)
-        else:
-            BCE_loss = F.binary_cross_entropy(inputs, targets, reduce=False)
-        pt = torch.exp(-BCE_loss)
-        F_loss = self.alpha * (1-pt)**self.gamma * BCE_loss
-
-        if self.reduce:
-            return torch.mean(F_loss)
-        else:
-            return F_loss
 
 
 

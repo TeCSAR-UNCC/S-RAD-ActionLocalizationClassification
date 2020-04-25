@@ -301,6 +301,73 @@ __C.CUDA = False
 
 __C.CROP_RESIZE_WITH_MAX_POOL = True
 
+# -----------------------------------------------------------------------------
+# AVA Dataset options
+# -----------------------------------------------------------------------------
+# Directory path of frames.
+__C.AVA =edict()
+__C.AVA.FRAME_DIR = "/mnt/AI_RAID/ava/frames/"
+
+# Directory path for files of frame lists.
+__C.AVA.FRAME_LIST_DIR = (
+    "/mnt/AI_RAID/ava/frame_lists/"
+)
+
+# Directory path for annotation files.
+__C.AVA.ANNOTATION_DIR = (
+    "/mnt/AI_RAID/ava/annotations/"
+)
+
+# Filenames of training samples list files.
+__C.AVA.TRAIN_LISTS = ["train.csv"]
+
+# Filenames of test samples list files.
+__C.AVA.TEST_LISTS = ["val.csv"]
+
+# Filenames of box list files for training. Note that we assume files which
+# contains predicted boxes will have a suffix "predicted_boxes" in the
+# filename.
+__C.AVA.TRAIN_GT_BOX_LISTS = ["ava_train_v2.1.csv"]
+__C.AVA.TRAIN_PREDICT_BOX_LISTS = []
+
+# Filenames of box list files for test.
+__C.AVA.TEST_PREDICT_BOX_LISTS = ["ava_val_predicted_boxes.csv"]
+
+# This option controls the score threshold for the predicted boxes to use.
+__C.AVA.DETECTION_SCORE_THRESH = 0.9
+
+# If use BGR as the format of input frames.
+__C.AVA.BGR = False
+
+# Whether to do horizontal flipping during test.
+__C.AVA.TEST_FORCE_FLIP = False
+
+# Whether to use full test set for validation split.
+__C.AVA.FULL_TEST_ON_VAL = False
+
+# The name of the file to the ava label map.
+__C.AVA.LABEL_MAP_FILE = "ava_action_list_v2.1_for_activitynet_2018.pbtxt"
+
+# The name of the file to the ava exclusion.
+__C.AVA.EXCLUSION_FILE = "ava_val_excluded_timestamps_v2.1.csv"
+
+# The name of the file to the ava groundtruth.
+__C.AVA.GROUNDTRUTH_FILE = "ava_val_v2.1.csv"
+
+# Backend to process image, includes `pytorch` and `cv2`.
+__C.AVA.IMG_PROC_BACKEND = "cv2"
+
+# The number of frames of the input clip.
+__C.AVA.NUM_FRAMES = 8
+
+# The video sampling rate of the input clip.
+__C.AVA.SAMPLING_RATE = 8
+
+# The mean value of the video raw pixels across the R G B channels.
+__C.AVA.MEAN = [0.45, 0.45, 0.45]
+
+# The std value of the video raw pixels across the R G B channels.
+__C.AVA.STD = [0.225, 0.225, 0.225]
 import pdb
 def get_output_dir(imdb, weights_filename):
   """Return the directory where experimental artifacts are placed.
