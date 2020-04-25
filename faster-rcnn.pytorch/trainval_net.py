@@ -25,19 +25,16 @@ import torchvision
 from statistics import mean 
 
 from torch.utils.data.sampler import Sampler
-from data_loader.data_load import Action_dataset
-from dataset_config import dataset
+from data_loader.data_load import VIRAT_dataset
+
 from dataset_config.ava_dataset import Ava
 from dataset_config.transforms import *
 from tensorboardX import SummaryWriter
 
 import multiprocessing
 multiprocessing.set_start_method('spawn', True)
-from model.utils.config import cfg, cfg_from_file, cfg_from_list, get_output_dir
-from model.utils.net_utils import weights_normal_init, save_net, load_net, \
-      adjust_learning_rate, save_checkpoint, clip_gradient,precision_recall, \
-        compute_ap,vis_detections,gt_visuals,AverageMeter
-from model.rpn.proposal_target_layer_cascade import _ProposalTargetLayer
+from model.utils.config import cfg,cfg_from_list,cfg_from_file
+from model.utils.net_utils import *
 
 from model.nms.nms import soft_nms,py_cpu_nms,avg_iou
 
@@ -70,9 +67,8 @@ def parse_args():
                       help='number of iterations to display',
                       default=10000, type=int)
 
-  parser.add_argument('--save_dir', dest='save_dir',
-                      help='directory to save models', default="models",
-                      type=str)
+  parser.add_argument('--acc_step',help='Gradient Accumalation step', default=1,
+                      type=int)
   parser.add_argument('--nw', dest='num_workers',
                       help='number of worker to load data',
                       default=0, type=int)
@@ -99,17 +95,12 @@ def parse_args():
   parser.add_argument('--shift_div', default=8, type=int, help='number of div for shift (default: 8)')
   parser.add_argument('--shift_place', default='blockres', type=str, help='place for shift (default: stageres)')
   parser.add_argument('--pretrain', type=str, default='imagenet')
-  parser.add_argument('--temporal_pool', default=False, action="store_true", help='add temporal pooling')
-  parser.add_argument('--non_local', default=False, action="store_true", help='add non local block')
   parser.add_argument('--tune_from', type=str, default=None, help='fine-tune from checkpoint')
 
 # dataset arguments from temporal segment networks
   parser.add_argument('--dataset', dest='dataset',
                       help='training dataset',
                       default='virat', type=str)
-  parser.add_argument('modality', type=str, choices=['RGB', 'Flow'])
-  parser.add_argument('--train_list', type=str, default="")
-  parser.add_argument('--val_list', type=str, default="")
   parser.add_argument('--num_segments', type=int, default=3)
   parser.add_argument('--dense_sample', default=False, action="store_true", 
   help='use dense sample for video dataset')
@@ -178,30 +169,19 @@ def main():
   args = parse_args()
   print('Called with args:')
   print(args)
-
+  
   best_meanap =0
   meanap = 0
   if args.dataset == "virat":args.set_cfgs = ['ANCHOR_SCALES', '[1, 2, 3]', 'ANCHOR_RATIOS', 
-      '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '20']
-  if args.dataset == "ava":args.set_cfgs = ['ANCHOR_SCALES', '[2,4,6]', 'ANCHOR_RATIOS', 
-      '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '20']
-  #args.store_name = '_'.join(
-  #      ['Action_proposal', args.dataset, args.modality, args.net, 'segment%d' % args.num_segments,
-  #       'e{}'.format(args.max_epochs)])
-  #if args.pretrain != 'imagenet':
-  #      args.store_name += '_{}'.format(args.pretrain)
-  #print('storing name: ' + args.store_name)
-  
-  num_class, args.train_list, args.val_list,args.test_list, train_path, val_path, test_path= dataset.return_dataset(args.dataset,args.modality)
-  args.cfg_file = "cfgs/{}_ls.yml".format(args.net) if args.large_scale else "/home/malar/git_sam/Action-Proposal-Networks/faster-rcnn.pytorch/cfgs/{}.yml".format(args.net)
-
+      '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '15']
+  if args.dataset == "ava":args.set_cfgs = ['ANCHOR_SCALES', '[2 , 4, 6]', 'ANCHOR_RATIOS', 
+      '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '15']
+  args.cfg_file = "cfgs/{}.yml".format(args.net)
   if args.cfg_file is not None:
     cfg_from_file(args.cfg_file)
   if args.set_cfgs is not None:
     cfg_from_list(args.set_cfgs)
-
-  print('Using config:')
-  pprint.pprint(cfg)
+  
   np.random.seed(cfg.RNG_SEED)
 
   #torch.backends.cudnn.benchmark = True
@@ -212,78 +192,75 @@ def main():
   # -- Note: Use validation set and disable the flipped to enable faster loading.
   cfg.USE_GPU_NMS = args.cuda
 
-  output_dir = args.save_dir + "/" + args.net + "/" + args.dataset
+  output_dir = cfg.VIRAT.output_model_dir + "/" + args.net + "/" + args.dataset
   if not os.path.exists(output_dir):
           os.makedirs(output_dir)
   
   #visualisation 
   vis = args.vis
-  #dataloader
-  input_size =600
-  input_mean = [0.485, 0.456, 0.406]
-  input_std = [0.229, 0.224, 0.225]
-  normalize = GroupNormalize(input_mean, input_std)
+  
+  #log initialisation
+  args.store_name = '_'.join(
+        ['ACT_D', args.dataset,args.net,'segment%d' % args.num_segments,'e{}'.format(args.max_epochs),'session%d'%args.session])
+  check_rootfolders(args.store_name)
+  log_training = open(os.path.join(cfg.LOG.ROOT_LOG_DIR, args.store_name, 'log.csv'), 'w')
+  with open(os.path.join(cfg.LOG.ROOT_LOG_DIR, args.store_name, 'args.txt'), 'w') as f:
+        f.write(str(args))
+  logger = SummaryWriter(log_dir=os.path.join(cfg.LOG.ROOT_LOG_DIR, args.store_name))
 
+  #dataloader 
   if args.dataset == 'virat':
+    num_class = cfg.VIRAT.NUM_CLASS
+    normalize = GroupNormalize(cfg.VIRAT.INPUT_MEAN, cfg.VIRAT.INPUT_STD)
     train_loader = torch.utils.data.DataLoader(
-        Action_dataset(train_path,num_class, args.train_list, num_segments=args.num_segments,
-                   modality=args.modality,random_shift=True, test_mode=False,
-                   input_size = input_size,
-                   transform=torchvision.transforms.Compose([ 
-                       ToTorchFormatTensor(div=1),
-                       normalize]),dense_sample =args.dense_sample,uniform_sample=args.uniform_sample,
-                 random_sample = args.random_sample,strided_sample = args.strided_sample),
+        VIRAT_dataset(cfg.VIRAT.TRAIN_DATA,cfg.VIRAT.NUM_CLASS,cfg,cfg.VIRAT.FRAMELIST_TRAIN, 
+        num_segments=args.num_segments,input_size = cfg.VIRAT.INPUT_SIZE,
+        transform=torchvision.transforms.Compose([ToTorchFormatTensor(div=1),normalize]),
+        dense_sample =args.dense_sample,uniform_sample=args.uniform_sample,random_sample = args.random_sample,
+        strided_sample = args.strided_sample),
         batch_size=args.batch_size, shuffle=True,
         num_workers=args.num_workers, pin_memory=True,
         drop_last=True)  # prevent something not % n_GPU
   
     val_loader = torch.utils.data.DataLoader(
-        Action_dataset(val_path, num_class,args.val_list, num_segments=args.num_segments,
-                   modality=args.modality,random_shift=True, test_mode=False,
-                   input_size = input_size,
-                   transform=torchvision.transforms.Compose([ 
-                       ToTorchFormatTensor(div=1),
-                       normalize]),dense_sample =args.dense_sample,uniform_sample=args.uniform_sample,
-                 random_sample = args.random_sample,strided_sample = args.strided_sample),
+        VIRAT_dataset(cfg.VIRAT.VAL_DATA,cfg.VIRAT.NUM_CLASS,cfg,cfg.VIRAT.FRAMELIST_VAL, 
+        num_segments=args.num_segments,input_size = cfg.VIRAT.INPUT_SIZE,
+        transform=torchvision.transforms.Compose([ToTorchFormatTensor(div=1),normalize]),
+        dense_sample =args.dense_sample,uniform_sample=args.uniform_sample,
+        random_sample = args.random_sample,strided_sample = args.strided_sample),
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.num_workers, pin_memory=True) 
 
     test_loader = torch.utils.data.DataLoader(
-        Action_dataset(test_path,num_class, args.test_list, num_segments=args.num_segments,
-                   modality=args.modality,random_shift=False, test_mode=True,
-                   input_size = input_size,
-                   transform=torchvision.transforms.Compose([ 
-                       ToTorchFormatTensor(div=1),
-                       normalize]),dense_sample =False,uniform_sample=False,
-                 random_sample = False,strided_sample = False),
-        batch_size=args.batch_size, shuffle=False,
+        VIRAT_dataset(cfg.VIRAT.TEST_DATA,cfg.VIRAT.NUM_CLASS,cfg,cfg.VIRAT.FRAMELIST_TEST,
+        num_segments=args.num_segments,input_size = cfg.VIRAT.INPUT_SIZE,
+        transform=torchvision.transforms.Compose([ToTorchFormatTensor(div=1),normalize]),
+        dense_sample =args.dense_sample,uniform_sample=args.uniform_sample,random_sample = args.random_sample,
+        strided_sample = args.strided_sample),batch_size=args.batch_size, shuffle=False,
         num_workers=args.num_workers, pin_memory=True)
-  if args.dataset == 'ava':
+
+  elif args.dataset == 'ava':
     train_loader = torch.utils.data.DataLoader(Ava(cfg,split = 'train'))
+  else: 
+    print("dataset is not defined")
+
           # prevent something not % n_GPU
   if args.cuda:
     cfg.CUDA = True
 
 # initilize the network here.
-  if args.net == 'vgg16':
-   fasterRCNN = vgg16(imdb.classes, pretrained=True, class_agnostic=args.class_agnostic)  
-  elif args.net == 'res101':
-   fasterRCNN = resnet(imdb.classes, 101,modality=args.modality ,pretrained=True, class_agnostic=args.class_agnostic)
-  elif args.net == 'res50':
-   base_model ='resnet50'
-   fasterRCNN = resnet(num_class,modality = 'RGB',num_layers =50, base_model ='resnet50', n_segments =8,
-               n_div =args.shift_div , place = args.shift_place,temporal_pool = args.temporal_pool,
+  if args.net == 'res50':
+   fasterRCNN = resnet(num_class,num_layers =50, base_model ='resnet50', n_segments =args.num_segments,
+               n_div =args.shift_div , place = args.shift_place,
                pretrain = args.pretrain,shift = args.shift,
                class_agnostic=args.class_agnostic,loss_type =args.loss_type)
-  elif args.net == 'res152':
-   fasterRCNN = resnet(imdb.classes, 152, pretrained=True, class_agnostic=args.class_agnostic)
+  
   else:
    print("network is not defined")
    pdb.set_trace()
 
   fasterRCNN.create_architecture()
 
-  lr = cfg.TRAIN.LEARNING_RATE
   lr = args.lr
   BASE_LEARNING_RATE = lr
   
@@ -374,25 +351,25 @@ def main():
   else:
     mGPUs = False
   
-  train_iters_per_epoch = int(len(train_loader.dataset) / args.batch_size)
-  val_iters_per_epoch = int(len(val_loader.dataset) / args.batch_size)
-  test_iters_per_epoch = int(len(test_loader.dataset) / args.batch_size)
   session = args.session
   
   LR_SCHEDULE = [    # (multiplier, epoch to start) tuples
     (1.0, 5)]
 
-  if args.use_tfboard:
-    from tensorboardX import SummaryWriter
-    logger = SummaryWriter("logs")
+  # initilize the tensor holder here.
+  im_data = torch.cuda.FloatTensor(1)
+  im_info = torch.cuda.FloatTensor(1)
+  num_boxes = torch.cuda.LongTensor(1)
+  gt_boxes = torch.cuda.FloatTensor(1)
+
+  #input variable
+  input_data = im_data,im_info,num_boxes,gt_boxes
   
   if args.evaluate:
-    meanprec = validate(val_loader, fasterRCNN,0,val_iters_per_epoch,num_class, \
-            args.num_segments,vis,session,args.batch_size)
+    meanprec = validate(val_loader, fasterRCNN,args.start_epoch,num_class, \
+            args.num_segments,vis,session,args.batch_size,input_data,cfg,log_training)
     
   for epoch in range(args.start_epoch, args.max_epochs + 1):
-    
-    
     
     '''warmup_lr_multiplier, warmup_end_epoch = LR_SCHEDULE[0]
     
@@ -415,40 +392,23 @@ def main():
         lr *= args.lr_decay_gamma
     #best_meanap = max(best_meanap,meanap) 
     train(train_loader, fasterRCNN,lr,optimizer,
-    epoch,num_class,train_iters_per_epoch,session,mGPUs,logger,output_dir)
+    epoch,num_class,args.batch_size,session,mGPUs,logger,output_dir,
+    input_data,cfg,args.acc_step,log_training)
     
     # evaluate on validation set
-    if epoch % 3 == 0:
-      meanap = validate(val_loader, fasterRCNN,epoch,val_iters_per_epoch,num_class, \
-              args.num_segments,vis,session,args.batch_size)
-      is_best = meanap > best_meanap
-      best_meanap = max(best_meanap,meanap)
-      print(f"best mean ap : [{best_meanap}]")
-    if epoch % 6 == 0:
-       test_ap = validate(test_loader, fasterRCNN,epoch,test_iters_per_epoch,num_class, \
-              args.num_segments,vis,session,args.batch_size)
+    #if epoch % 3 == 0:
+    meanap = validate(val_loader, fasterRCNN,epoch,num_class, \
+              args.num_segments,vis,session,args.batch_size,input_data,cfg,log_training)
+    is_best = meanap > best_meanap
+    best_meanap = max(best_meanap,meanap)
+    print(f"best mean ap : [{best_meanap}]")
+    if epoch % 10== 0:
+       test_ap = validate(test_loader, fasterRCNN,epoch,num_class, \
+              args.num_segments,vis,session,args.batch_size,input_data,cfg,log_training)
 
-def train(train_loader,fasterRCNN,lr,optimizer,epoch,num_class,train_iters_per_epoch,session,mGPUs,logger,output_dir):
-       
-    # initilize the tensor holder here.
-    im_data = torch.FloatTensor(1)
-    im_info = torch.FloatTensor(1)
-    num_boxes = torch.LongTensor(1)
-    gt_boxes = torch.FloatTensor(1)
-
-    # ship to cuda
-    im_data = im_data.cuda()
-    im_info = im_info.cuda()
-    num_boxes = num_boxes.cuda()
-    gt_boxes = gt_boxes.cuda()
-
-    # make variable
-    im_data = Variable(im_data)
-    im_info = Variable(im_info)
-    num_boxes = Variable(num_boxes)
-    gt_boxes = Variable(gt_boxes)
-
-
+def train(train_loader,fasterRCNN,lr,optimizer,epoch,num_class,batch_size,session,mGPUs,
+          logger,output_dir,input_data,cfg,acc_step,log):
+    
     batch_time = AverageMeter()
     data_time = AverageMeter()
 
@@ -457,11 +417,11 @@ def train(train_loader,fasterRCNN,lr,optimizer,epoch,num_class,train_iters_per_e
     #loss = 0
     loss_temp = 0
     end = time.time()
-    data_iter = iter(train_loader)
+    im_data,im_info,num_boxes,gt_boxes = input_data
+    train_iters_per_epoch = int(len(train_loader.dataset) / batch_size)
     optimizer.zero_grad()
     fasterRCNN.zero_grad()
-    for step in range (train_iters_per_epoch):
-        data = next(data_iter)
+    for step,data in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
         with torch.no_grad():
@@ -471,7 +431,7 @@ def train(train_loader,fasterRCNN,lr,optimizer,epoch,num_class,train_iters_per_e
           im_info.resize_(data[3].size()).copy_(data[3])
         im_data = im_data.view(-1,im_data.size(2),im_data.size(3),im_data.size(4))
         im_info = im_info.view(-1,3)
-        gt_boxes= gt_boxes.view(-1,15,num_class+4)
+        gt_boxes= gt_boxes.view(-1,cfg.MAX_NUM_GT_BOXES,num_class+4)
         num_boxes = num_boxes.view(-1)
         
         #fasterRCNN.zero_grad()
@@ -486,17 +446,14 @@ def train(train_loader,fasterRCNN,lr,optimizer,epoch,num_class,train_iters_per_e
         loss_temp += loss.item()
          
         # backward
-        #normalise the loss i.e average the accumuated loss
-        loss = loss / 64                   
+        #normalise the loss i.e average the accumuated loss by accumulation steps
+        loss = loss / acc_step                   
         loss.backward()
 
 
-        if (step+1)%64 == 0:   #wait for several backward step
+        if (step+1)%acc_step == 0:   #wait for several backward step
           optimizer.step()     #update the model 
           fasterRCNN.zero_grad()#Reset the gradient tensor
-
-        #if step > 0:
-        #loss_temp /= (100 + 1)
 
         if mGPUs:
           loss_rpn_cls = rpn_loss_cls.mean().item()
@@ -517,26 +474,29 @@ def train(train_loader,fasterRCNN,lr,optimizer,epoch,num_class,train_iters_per_e
         batch_time.update(time.time() - end)
         end = time.time()
 
-        print("[session %d][epoch %2d][iter %4d/%4d] loss: %.4f, lr: %.2e" \
-                                % (session, epoch, step, train_iters_per_epoch, loss, lr))
-        output = ('\t\t\t Batch_Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                      'Data_Time {data_time.val:.3f} ({data_time.avg:.3f})\t'
-                      .format(batch_time=batch_time,data_time=data_time))
+        output = ('[session {0}][epoch {1}][iter {2}/{3}] loss: {loss:.4f}, lr: {lr:.2e}\n '
+                  '\t\t\t\t Time {batch_time.val:.3f} ({batch_time.avg:.3f})'
+                  'Data {data_time.val:.3f} ({data_time.avg:.3f})\n'
+                  '\t\t\t\t fg/bg=({4}/{5}) \n'
+                  '\t\t\t\t rpn_cls: {loss_rpn_cls:.4f}, rpn_box: {loss_rpn_box:.4f},rcnn_cls: {loss_rcnn_cls:.4f},rcnn_box {loss_rcnn_box:.4f}\n' 
+               .format(session, epoch, step, train_iters_per_epoch,fg_cnt, bg_cnt,
+               loss= loss,lr= lr,batch_time=batch_time,data_time=data_time,
+                      loss_rpn_cls=loss_rpn_cls,loss_rpn_box= loss_rpn_box,
+                      loss_rcnn_cls=loss_rcnn_cls,loss_rcnn_box= loss_rcnn_box))
         print(output)
-        print("\t\t\tfg/bg=(%d/%d)" % (fg_cnt, bg_cnt))
-        print("\t\t\trpn_cls: %.4f, rpn_box: %.4f, rcnn_cls: %.4f, rcnn_box %.4f" \
-                      % (loss_rpn_cls, loss_rpn_box, loss_rcnn_cls, loss_rcnn_box))
+        log.write(output + '\n')
+        log.flush()
         #if args.use_tfboard:
-        info = {
-            'loss': loss_temp,
+        '''info = {
+            'loss': loss,
             'loss_rpn_cls': loss_rpn_cls,
             'loss_rpn_box': loss_rpn_box,
             'loss_rcnn_cls': loss_rcnn_cls,
             'loss_rcnn_box': loss_rcnn_box
         }
-        logger.add_scalars("logs_s_{}/losses".format(session), info, (epoch - 1) * train_iters_per_epoch + step)
-        loss_temp = 0
-        logger.close()
+        logger.add_scalars("logs_s_{}/losses".format(session), info, (epoch - 1) * train_iters_per_epoch + step)'''
+        
+        
     save_name = os.path.join(output_dir, 'faster_rcnn_{}_{}_{}.pth'.format(session, epoch, step))
     save_checkpoint({
       'session': session,
@@ -547,38 +507,20 @@ def train(train_loader,fasterRCNN,lr,optimizer,epoch,num_class,train_iters_per_e
       #'class_agnostic': args.class_agnostic,
     }, save_name)
     print('save model: {}'.format(save_name))
+    logger.close()
         
-
-def validate(val_loader,fasterRCNN,epoch,val_iters_per_epoch,
-              num_class,num_segments,vis,session,batch_size):
+@torch.no_grad()
+def validate(val_loader,fasterRCNN,epoch,num_class,num_segments,vis,session,
+             batch_size,input_data,cfg,log):
     
-    # initilize the tensor holder here.
-    im_data = torch.FloatTensor(1)
-    im_info = torch.FloatTensor(1)
-    num_boxes = torch.LongTensor(1)
-    gt_boxes = torch.FloatTensor(1)
-
-    # ship to cuda
-    #if args.cuda:
-    im_data = im_data.cuda()
-    im_info = im_info.cuda()
-    num_boxes = num_boxes.cuda()
-    gt_boxes = gt_boxes.cuda()
-
-    # make variable
-    im_data = Variable(im_data)
-    im_info = Variable(im_info)
-    num_boxes = Variable(num_boxes)
-    gt_boxes = Variable(gt_boxes)
-    data_iter = iter(val_loader)
-
     batch_time = AverageMeter()
-
+    val_iters_per_epoch = int(len(val_loader.dataset) / batch_size)
+    im_data,im_info,num_boxes,gt_boxes = input_data
     fasterRCNN.eval()
     all_boxes = [[[[]for _ in range(num_class)] for _ in range(batch_size *num_segments)]
                for _ in range(val_iters_per_epoch)]
     #limit the number of proposal per image across all the class
-    max_per_image = 15
+    max_per_image = cfg.MAX_NUM_GT_BOXES
     bins = 9 
     score_threshold = 0.1
     tp_labels = np.zeros((num_class,bins),dtype=int)
@@ -586,19 +528,14 @@ def validate(val_loader,fasterRCNN,epoch,val_iters_per_epoch,
     fn_labels = np.zeros((num_class,bins),dtype=int)
     all_pred_box,all_gtbb,all_gtlabels,all_scores=[],[],[],[]
     end = time.time()
-    with torch.no_grad():
-      for step in range (val_iters_per_epoch):
-        data = next(data_iter)
+    for step,data in enumerate(val_loader):
         im_data.resize_(data[0].size()).copy_(data[0])
         gt_boxes.resize_(data[1].size()).copy_(data[1])
         num_boxes.resize_(data[2].size()).copy_(data[2])
         im_info.resize_(data[3].size()).copy_(data[3])
-        imgsize1 = im_data.size(3)
-        imgsize2 = im_data.size(4)
-        channel = im_data.size(2)
-        im_data = im_data.view(-1,channel,imgsize1,imgsize2)
+        im_data = im_data.view(-1,im_data.size(2),im_data.size(3),im_data.size(4))
         im_info = im_info.view(-1,3)
-        gt_boxes= gt_boxes.view(-1,15,num_class+4)
+        gt_boxes= gt_boxes.view(-1,cfg.MAX_NUM_GT_BOXES,num_class+4)
         num_boxes = num_boxes.view(-1)
         img_path = data[4]
         rois, cls_prob, bbox_pred = fasterRCNN(im_data, im_info, gt_boxes, num_boxes)
@@ -664,150 +601,39 @@ def validate(val_loader,fasterRCNN,epoch,val_iters_per_epoch,
                   all_boxes[step][image][class_id] = all_boxes[step][image][class_id][keep, :]
                 else :
                   all_boxes[step][image][class_id] = []
-         #if all_boxes[step][image].any()  
+          #if all_boxes[step][image].any()  
           det = np.asarray(all_boxes[step][image]) 
           if det.size > 0:
             all_boxes[step][image] = avg_iou(all_boxes[step][image],0.7)
         
           #calculate tp_fp_fn
-          compute_tp_fp(all_boxes[step][image],gtlabels[image],gtbb[image], \
+          tp_labels,fp_labels,fn_labels =compute_tp_fp(all_boxes[step][image],gtlabels[image],gtbb[image], \
                       num_class,tp_labels,fp_labels,fn_labels,bins)
         output = ('Test: [{0}/{1}]\t'
                 'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                 .format(step,(val_iters_per_epoch), batch_time=batch_time))
         print(output)
      
-    print(' completed step:{}'.format(step))
-    print('tp_labels: {}'.format(tp_labels))
-    print('fp_labels: {}'.format(fp_labels))
-    print('fn_labels: {}'.format(fn_labels))
+    
     ap = precision_recall(tp_labels,fp_labels,fn_labels,num_class)
     for n in range(1,num_class):
         for key, v in activity2id.items():
           if v == n :
             print(f"Class '{n}' ({key}) - AveragePrecision: {ap[n-1]}")
+            ap_out = ('Class {0} ({1}) - AveragePrecision: {2}').format(n,key,ap[n-1])
+            log.write(ap_out + '\n')
+    output = (' completed step:{0}\n'
+              'tp_labels: {1}\n'
+              'fp_labels: {2} \n' 
+              'fn_labels: {3} \n'          
+                           .format(step,tp_labels,fp_labels,fn_labels)) 
               
     #print the mean average precision      
     print(f"mAP for epoch [{epoch}]: {mean(ap)}")
+    mean_outap = ('mAP for epoch [{0}]: {1}'.format(epoch,mean(ap)))
+    log.write(output + '\n' + mean_outap + '\n')
+    log.flush()
     return np.mean(ap)
-
-def compute_tp_fp(all_boxes,gtlabels,gtbb,num_class,tp_labels,fp_labels,fn_labels,bins):
-    bin_dict = {
-                  0: lambda x: 1 if x>= 0.1 else 0,
-                  1: lambda x: 1 if x>= 0.2 else 0,
-                  2: lambda x: 1 if x>= 0.3 else 0,
-                  3: lambda x: 1 if x>= 0.4 else 0,
-                  4: lambda x: 1 if x>= 0.5 else 0,
-                  5: lambda x: 1 if x>= 0.6 else 0,
-                  6: lambda x: 1 if x>= 0.7 else 0,
-                  7: lambda x: 1 if x>= 0.8 else 0,
-                  8: lambda x: 1 if x>= 0.9 else 0
-                }
-    
-    #get the non -zero groundtruth for that image
-    index=np.unique(np.nonzero(gtbb)[0])
-    gtbox = gtbb[index,:]       #[gt,4]
-    gtlabel = gtlabels[index,:] #[gt,40]
-    all_boxes = np.asarray(all_boxes)
-    
-
-    # compute tp fp and fn for all class in that image 
-    #change---------------
-    #for class_id in range(1,num_class):
-
-      #keep track of propposal and gt
-    is_gt_detected =[] 
-    is_proposal_labeled =[]
-      
-      #get the detections and groudtruths for each class
-      #all_detectbb = all_boxes[class_id]
-    pred_bb = all_boxes[:,:4]
-    pred_label = all_boxes[:,4:]
-      #labels = gtlabel[:,class_id]
-      
-      #variables for the match table
-    num_boxes_per_img = gtbox.shape[0]
-    num_proposal = pred_bb.shape[0]
-      
-      #check if there is a detection for that class
-    if all_boxes.any() !=0:
-       overlaps = cpu_bbox_overlaps(pred_bb, gtbox)
-       
-       #if there is a detection and gt 
-       if (num_proposal>0) and (num_boxes_per_img !=0):
-            match_table = np.zeros((num_proposal,num_boxes_per_img),dtype=float)
-            for p in range(num_proposal):
-                for g in range(num_boxes_per_img):
-                    if overlaps[p][g] >= 0.5:
-                        match_table[p,g] = overlaps[p][g]
-                    
-            best_match = match_table.max()
-            while best_match >= 0.5:
-                match_pos = np.where(match_table == best_match)
-                p = match_pos[0][0]
-                detectclass = pred_label[p]
-                g = match_pos[1][0]
-                gtclass = gtlabel[g]
-                is_gt_detected += [g]
-                is_proposal_labeled+=[p]
-                for class_id in range(1,num_class):
-                  gt_label = gtclass[class_id]
-                  detect_label = detectclass[class_id]
-                  if gt_label == 1:
-                  #if there is groundtruth and pred_score matches with the bin = tp
-                   for bin_id in range(bins):
-                    bin_value=  bin_dict[bin_id](detect_label)
-                    if bin_value == 1 : 
-                     tp_labels[class_id][bin_id] += 1
-                
-                    else: #there is a gt but pred_scores doesnt match with bin = fn
-                     fn_labels[class_id][bin_id] +=1
-                
-                  else: #no gt but pred_scores matches bin = fp
-                   for bin_id in range(bins):
-                    bin_value=  bin_dict[bin_id](detect_label)
-                    if bin_value == 1 : 
-                      fp_labels[class_id][bin_id] +=1 
-                
-                match_table[p,:] = np.zeros(match_table[p,:].shape)
-                match_table[:,g] = np.zeros(match_table[:,g].shape)
-
-                best_match = match_table.max()   
-            
-            #count the left out proposals as fp      
-            for k in range(num_proposal): 
-             if k not in is_proposal_labeled:
-               for class_id in range(1,num_class):
-                  detect_label = pred_label[k][class_id]
-                  for bin_id in range(bins):
-                      bin_value=  bin_dict[bin_id](detect_label)
-                      if bin_value == 1 : 
-                         fp_labels[class_id][bin_id] +=1   
-                   
-            
-           
-            #count the left out groundtruths as fn
-            for gt in range(num_boxes_per_img):
-                if gt not in is_gt_detected:
-                  for class_id in range(1,num_class):
-                    ground_label = gtlabel[gt][class_id]
-                    if ground_label == 1:                    
-                      fn_labels[class_id,:] += 1   
-      #for no detections for that class  
-    else:
-       if gtlabel.any() != 0:
-        for gt in range(num_boxes_per_img):
-          for class_id in range(1,num_class):
-                    ground_label = gtlabel[gt][class_id]
-                    if ground_label == 1:                    
-                      fn_labels[class_id,:] += 1  
-
-
-              
-
-
-    
-
 
 if __name__ == '__main__':
    main()    

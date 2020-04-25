@@ -32,7 +32,7 @@ class _fasterRCNN(nn.Module):
         self.RCNN_loss_bbox = 0
 
         # define rpn
-        self.RCNN_rpn = _RPN(self.dout_base_model)
+        self.RCNN_rpn = _RPN(self.dout_base_model,self.n_classes)
         self.RCNN_proposal_target = _ProposalTargetLayer(self.n_classes)
 
         # self.RCNN_roi_pool = _RoIPooling(cfg.POOLING_SIZE, cfg.POOLING_SIZE, 1.0/16.0)
@@ -75,11 +75,13 @@ class _fasterRCNN(nn.Module):
 
         rois = Variable(rois)
         # do roi pooling based on predicted rois
-        #cfg.POOLING_MODE == 'align'
-        #if cfg.POOLING_MODE == 'align':
-        pooled_feat = self.RCNN_roi_align(base_feat, rois.view(-1, 5))
-        #elif cfg.POOLING_MODE == 'pool':
-        #    pooled_feat = self.RCNN_roi_pool(base_feat, rois.view(-1,5))
+        
+        if cfg.POOLING_MODE == "align":
+           pooled_feat = self.RCNN_roi_align(base_feat, rois.view(-1, 5))
+        elif cfg.POOLING_MODE == "crop": #TODO
+           pooled_feat = self.RCNN_roi_align(base_feat, rois.view(-1, 5))
+        elif cfg.POOLING_MODE == "pool":
+           pooled_feat = self.RCNN_roi_pool(base_feat, rois.view(-1,5))
 
         # feed pooled features to top model
         pooled_feat = self._head_to_tail(pooled_feat)
@@ -112,9 +114,9 @@ class _fasterRCNN(nn.Module):
             # classification loss
             #rois_label = rois_label.type_as(cls_score)
             if self.loss_type == "focal":
-               gamma = 5.0
-               weights = 0.25
-               RCNN_loss_cls = focal_loss(rois_label, cls_score, weights, gamma)
+               loss_gamma =cfg.FOCAL_GAMMA
+               loss_alpha =cfg.FOCAL_ALPHA
+               RCNN_loss_cls = focal_loss(rois_label, cls_score, loss_alpha, loss_gamma)
             elif self.loss_type == "sigmoid":
                RCNN_loss_cls = F.binary_cross_entropy_with_logits(cls_score, rois_label)
 

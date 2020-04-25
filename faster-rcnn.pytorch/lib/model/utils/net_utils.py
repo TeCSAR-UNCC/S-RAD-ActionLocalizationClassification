@@ -5,9 +5,12 @@ from torch.autograd import Variable
 import numpy as np
 import torchvision.models as models
 from model.utils.config import cfg
+import os
 import cv2
 import pdb
 import random
+
+from model.rpn.bbox_transform import cpu_bbox_overlaps
 
 def focal_loss(labels, logits, alpha, gamma):
     """Compute the focal loss between `logits` and the ground truth `labels`.
@@ -140,6 +143,127 @@ def adjust_learning_rate(optimizer, decay=0.1):
     """Sets the learning rate to the initial LR decayed by 0.5 every 20 epochs"""
     for param_group in optimizer.param_groups:
         param_group['lr'] = decay * param_group['lr']
+
+def compute_tp_fp(all_boxes,gtlabels,gtbb,num_class,tp_labels,fp_labels,fn_labels,bins):
+    bin_dict = {
+                  0: lambda x: 1 if x>= 0.1 else 0,
+                  1: lambda x: 1 if x>= 0.2 else 0,
+                  2: lambda x: 1 if x>= 0.3 else 0,
+                  3: lambda x: 1 if x>= 0.4 else 0,
+                  4: lambda x: 1 if x>= 0.5 else 0,
+                  5: lambda x: 1 if x>= 0.6 else 0,
+                  6: lambda x: 1 if x>= 0.7 else 0,
+                  7: lambda x: 1 if x>= 0.8 else 0,
+                  8: lambda x: 1 if x>= 0.9 else 0
+                }
+    
+    #get the non -zero groundtruth for that image
+    index=np.unique(np.nonzero(gtbb)[0])
+    gtbox = gtbb[index,:]       #[gt,4]
+    gtlabel = gtlabels[index,:] #[gt,40]
+    all_boxes = np.asarray(all_boxes)
+    
+
+    # compute tp fp and fn for all class in that image 
+    #change---------------
+    #for class_id in range(1,num_class):
+
+      #keep track of propposal and gt
+    is_gt_detected =[] 
+    is_proposal_labeled =[]
+      
+      #get the detections and groudtruths for each class
+      #all_detectbb = all_boxes[class_id]
+    pred_bb = all_boxes[:,:4]
+    pred_label = all_boxes[:,4:]
+      #labels = gtlabel[:,class_id]
+      
+      #variables for the match table
+    num_boxes_per_img = gtbox.shape[0]
+    num_proposal = pred_bb.shape[0]
+      
+      #check if there is a detection for that class
+    if all_boxes.any() !=0:
+       overlaps = cpu_bbox_overlaps(pred_bb, gtbox)
+       
+       #if there is a detection and gt 
+       if (num_proposal>0) and (num_boxes_per_img !=0):
+            match_table = np.zeros((num_proposal,num_boxes_per_img),dtype=float)
+            for p in range(num_proposal):
+                for g in range(num_boxes_per_img):
+                    if overlaps[p][g] >= 0.5:
+                        match_table[p,g] = overlaps[p][g]
+                    
+            best_match = match_table.max()
+            while best_match >= 0.5:
+                match_pos = np.where(match_table == best_match)
+                p = match_pos[0][0]
+                detectclass = pred_label[p]
+                g = match_pos[1][0]
+                gtclass = gtlabel[g]
+                is_gt_detected += [g]
+                is_proposal_labeled+=[p]
+                for class_id in range(1,num_class):
+                  gt_label = gtclass[class_id]
+                  detect_label = detectclass[class_id]
+                  if gt_label == 1:
+                  #if there is groundtruth and pred_score matches with the bin = tp
+                   for bin_id in range(bins):
+                    bin_value=  bin_dict[bin_id](detect_label)
+                    if bin_value == 1 : 
+                     tp_labels[class_id][bin_id] += 1
+                
+                    else: #there is a gt but pred_scores doesnt match with bin = fn
+                     fn_labels[class_id][bin_id] +=1
+                
+                  else: #no gt but pred_scores matches bin = fp
+                   for bin_id in range(bins):
+                    bin_value=  bin_dict[bin_id](detect_label)
+                    if bin_value == 1 : 
+                      fp_labels[class_id][bin_id] +=1 
+                
+                match_table[p,:] = np.zeros(match_table[p,:].shape)
+                match_table[:,g] = np.zeros(match_table[:,g].shape)
+
+                best_match = match_table.max()   
+            
+            #count the left out proposals as fp      
+            for k in range(num_proposal): 
+             if k not in is_proposal_labeled:
+               for class_id in range(1,num_class):
+                  detect_label = pred_label[k][class_id]
+                  for bin_id in range(bins):
+                      bin_value=  bin_dict[bin_id](detect_label)
+                      if bin_value == 1 : 
+                         fp_labels[class_id][bin_id] +=1   
+                   
+            
+           
+            #count the left out groundtruths as fn
+            for gt in range(num_boxes_per_img):
+                if gt not in is_gt_detected:
+                  for class_id in range(1,num_class):
+                    ground_label = gtlabel[gt][class_id]
+                    if ground_label == 1:                    
+                      fn_labels[class_id,:] += 1   
+      #for no detections for that class  
+    else:
+       if gtlabel.any() != 0:
+        for gt in range(num_boxes_per_img):
+          for class_id in range(1,num_class):
+                    ground_label = gtlabel[gt][class_id]
+                    if ground_label == 1:                    
+                      fn_labels[class_id,:] += 1  
+    return tp_labels,fp_labels,fn_labels
+
+
+def check_rootfolders(store_name):
+    """Create log and model folder"""
+    folders_util = [cfg.LOG.ROOT_LOG_DIR, os.path.join(cfg.LOG.ROOT_LOG_DIR, store_name)]
+    for folder in folders_util:
+        if not os.path.exists(folder):
+            print('creating folder ' + folder)
+            os.mkdir(folder)
 
 def precision_recall(tp_labels,fp_labels,fn_labels,num_class):
   ap = []

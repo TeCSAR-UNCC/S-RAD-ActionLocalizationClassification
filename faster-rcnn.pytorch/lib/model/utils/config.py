@@ -19,7 +19,7 @@ cfg = __C
 __C.TRAIN = edict()
 
 # Initial learning rate
-__C.TRAIN.LEARNING_RATE = 0.001
+__C.TRAIN.LEARNING_RATE = 0.04
 
 # Momentum
 __C.TRAIN.MOMENTUM = 0.9
@@ -280,13 +280,13 @@ __C.USE_GPU_NMS = True
 # Default GPU device id
 __C.GPU_ID = 0
 
-__C.POOLING_MODE = 'pool'
+__C.POOLING_MODE = 'align'
 
 # Size of the pooled region after RoI pooling
 __C.POOLING_SIZE = 7
 
 # Maximal number of gt rois in an image during Training
-__C.MAX_NUM_GT_BOXES = 20
+__C.MAX_NUM_GT_BOXES = 15
 
 # Anchor scales for RPN
 __C.ANCHOR_SCALES = [8,16,32]
@@ -300,6 +300,54 @@ __C.FEAT_STRIDE = [16, ]
 __C.CUDA = False
 
 __C.CROP_RESIZE_WITH_MAX_POOL = True
+
+# -----------------------------------------------------------------------------
+# log options
+# -----------------------------------------------------------------------------
+__C.LOG = edict()
+
+__C.LOG.ROOT_LOG_DIR = "/home/malar/git_sam/Action-Proposal-Networks/faster-rcnn.pytorch/logs/"
+# -----------------------------------------------------------------------------
+# Focal  loss options
+# -----------------------------------------------------------------------------
+__C.FOCAL = edict()
+__C.FOCAL_ALPHA = 0.25
+__C.FOCAL_GAMMA = 5.0
+# -----------------------------------------------------------------------------
+# VIRAT Dataset options
+# -----------------------------------------------------------------------------
+
+__C.VIRAT = edict()
+
+# Directory for the path of the Train dataset
+__C.VIRAT.TRAIN_DATA = "/mnt/AI_RAID/VIRAT/actev-data-repo/dataset/train/"
+
+# Directory for the path of the validation dataset
+__C.VIRAT.VAL_DATA = "/mnt/AI_RAID/VIRAT/actev-data-repo/dataset/val/"
+
+# Directory for the path of the Test dataset
+__C.VIRAT.TEST_DATA = "/mnt/AI_RAID/actev-data-repo/dataset/test/"
+
+# num of class
+
+__C.VIRAT.NUM_CLASS = 30
+
+# Directory to the frame list 
+
+__C.VIRAT.FRAMELIST_TRAIN = "/mnt/AI_RAID/VIRAT/actev-data-repo/frame_list/train_list.txt"
+__C.VIRAT.FRAMELIST_VAL = "/mnt/AI_RAID/VIRAT/actev-data-repo/frame_list/val_list.txt"
+__C.VIRAT.FRAMELIST_TEST = "/mnt/AI_RAID/VIRAT/actev-data-repo/frame_list/test_list.txt"
+
+# Input image size and mean/std for normalisation
+
+__C.VIRAT.INPUT_SIZE = 600
+__C.VIRAT.INPUT_MEAN = [0.485, 0.456, 0.406]
+__C.VIRAT.INPUT_STD  = [0.229, 0.224, 0.225]
+
+#
+
+__C.VIRAT.output_model_dir = "/mnt/AI_RAID/VIRAT/actev-data-repo/models"
+  
 
 # -----------------------------------------------------------------------------
 # AVA Dataset options
@@ -368,38 +416,6 @@ __C.AVA.MEAN = [0.45, 0.45, 0.45]
 
 # The std value of the video raw pixels across the R G B channels.
 __C.AVA.STD = [0.225, 0.225, 0.225]
-import pdb
-def get_output_dir(imdb, weights_filename):
-  """Return the directory where experimental artifacts are placed.
-  If the directory does not exist, it is created.
-
-  A canonical path is built using the name from an imdb and a network
-  (if not None).
-  """
-  outdir = osp.abspath(osp.join(__C.ROOT_DIR, 'output', __C.EXP_DIR, imdb.name))
-  if weights_filename is None:
-    weights_filename = 'default'
-  outdir = osp.join(outdir, weights_filename)
-  if not os.path.exists(outdir):
-    os.makedirs(outdir)
-  return outdir
-
-
-def get_output_tb_dir(imdb, weights_filename):
-  """Return the directory where tensorflow summaries are placed.
-  If the directory does not exist, it is created.
-
-  A canonical path is built using the name from an imdb and a network
-  (if not None).
-  """
-  outdir = osp.abspath(osp.join(__C.ROOT_DIR, 'tensorboard', __C.EXP_DIR, imdb.name))
-  if weights_filename is None:
-    weights_filename = 'default'
-  outdir = osp.join(outdir, weights_filename)
-  if not os.path.exists(outdir):
-    os.makedirs(outdir)
-  return outdir
-
 
 def _merge_a_into_b(a, b):
   """Merge config dictionary a into config dictionary b, clobbering the
@@ -432,7 +448,6 @@ def _merge_a_into_b(a, b):
         raise
     else:
       b[k] = v
-
 
 def cfg_from_file(filename):
   """Load a config file and merge it into the default options."""

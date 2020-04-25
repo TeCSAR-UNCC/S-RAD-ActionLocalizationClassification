@@ -208,7 +208,7 @@ def _prepare_base_model(self):
                 print('Adding temporal shift...')
                 from ops.temporal_shift import make_temporal_shift
                 make_temporal_shift(model, self.n_segments,
-                                    n_div=self.shift_div, place=self.shift_place, temporal_pool=self.temporal_pool)
+                                    n_div=self.shift_div, place=self.shift_place)
 
         model.last_layer_name = 'fc'
         self.input_size = 600,600
@@ -240,9 +240,9 @@ def resnet152(pretrained=False):
   return model
 
 class resnet(_fasterRCNN):
-  def __init__(self, classes, modality = 'RGB',num_layers=101,base_model ='resnet50',
-               n_segments =8,n_div =8 , place = 'blockres',temporal_pool = 'false',
-               pretrain = 'imagenet',shift = 'true',class_agnostic = 'false',loss_type = 'sigmoid'):
+  def __init__(self, classes,num_layers=101,base_model ='resnet50',
+               n_segments =8,n_div =8 , place = 'blockres',pretrain = 'imagenet',
+               shift = 'true',class_agnostic = 'false',loss_type = 'sigmoid'):
     self.model_path = 'data/pretrained_model/resnet101_caffe.pth'
     self.dout_base_model = 1024
     self.pretrain = pretrain
@@ -250,9 +250,7 @@ class resnet(_fasterRCNN):
     self.n_segments = n_segments
     self.shift_div = n_div
     self.shift_place = place
-    self.temporal_pool=temporal_pool
     self.class_agnostic = class_agnostic
-    self.modality = modality
     self.loss_type = loss_type
 
     _fasterRCNN.__init__(self, classes, class_agnostic,loss_type)
