@@ -38,7 +38,7 @@ It will compile all the modules you need, including NMS, ROI_Pooing, ROI_Align a
 Modify the dataset path , log directory , model directory in the config file to the path you are using:
 
 ```
-cd faster-rcnn.pytorch/lib/model/utils/config.py
+faster-rcnn.pytorch/lib/model/utils/config.py
 ```
 All the model and dataset related parameters can be updated here in the config file according to the dataset and model you are using.
 
@@ -60,7 +60,7 @@ where 'bs' is the batch size with default 1,'s' is the session number to differe
 
 If you want to evlauate the detection performance of a pre-trained res50 model on virat test set, simply run
 ```
-python test.py --dataset virat --net res50 --num_segments 8 --nw $NUM_WORKERS --bs 1 \
+python3 test.py --dataset virat --net res50 --num_segments 8 --nw $NUM_WORKERS --bs 1 \
                 --shift --shift_div 8 --shift_place blockres --lr $LEARNING_RATE \
                 --lr_decay_step $DECAY_STEP --cuda --epochs $MAX_EPOCHS \
                 --dense_sample --checksession $CHECKSESSION --checkepoch $EPOCH --checkpoint $CHECKPOINT
