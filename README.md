@@ -76,7 +76,7 @@ CUDA_VISIBLE_DEVICES=$GPU_ID python3 trainval_net.py \
                    --use_tfb  --s $SESSION_NUM --epochs $MAX_EPOCHS --dense_sample --vis &
 
 ```
-where 'bs' is the batch size with default 1,'s' is the session number to differentiate the training session,'epochs' is the value the maximum epoch should be, 'vis' to enable visualisation on validation data ,'dense_sample' to enable dense sampling ,it can be uniform_sampling,strided_sampling,random sampling  **V100 GPU accomodated batch size of 3 (24 frames) at lr_rate 0.001 , lr_decay_step of 4**
+where 'bs' is the batch size with default 1,'s' is the session number to differentiate the training session,'epochs' is the value the maximum epoch should be, 'vis' to enable visualisation on validation data ,'dense_sample' to enable dense sampling ,it can be uniform_sampling,strided_sampling,random sampling  **V100 GPU accomodated batch size of 3 (24 frames) at lr_rate 0.04 , lr_decay_step of 15**
 
 ## Test
 
