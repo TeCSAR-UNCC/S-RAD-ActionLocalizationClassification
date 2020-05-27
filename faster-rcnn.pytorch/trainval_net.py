@@ -42,7 +42,7 @@ from model.roi_layers import nms
 from model.rpn.bbox_transform import bbox_transform_inv,cpu_bbox_overlaps_batch, \
           bbox_transform_batch,cpu_bbox_overlaps,clip_boxes
 
-from data_loader.data_load import activity2id
+from data_loader.data_load import activity2id,activity2id_hard
 from model.faster_rcnn.resnet import resnet
 
 def parse_args():
@@ -260,7 +260,7 @@ def main():
    pdb.set_trace()
 
   fasterRCNN.create_architecture()
-
+  print("blocks fixed:%d"%(cfg.RESNET.FIXED_BLOCKS))
   lr = args.lr
   BASE_LEARNING_RATE = lr
   
@@ -483,6 +483,7 @@ def train(train_loader,fasterRCNN,lr,optimizer,epoch,num_class,batch_size,sessio
                loss= loss,lr= lr,batch_time=batch_time,data_time=data_time,
                       loss_rpn_cls=loss_rpn_cls,loss_rpn_box= loss_rpn_box,
                       loss_rcnn_cls=loss_rcnn_cls,loss_rcnn_box= loss_rcnn_box))
+        #print("With fixed layer")
         print(output)
         log.write(output + '\n')
         log.flush()
@@ -514,7 +515,7 @@ def validate(val_loader,fasterRCNN,epoch,num_class,num_segments,vis,session,
              batch_size,input_data,cfg,log):
     
     batch_time = AverageMeter()
-    val_iters_per_epoch = int(len(val_loader.dataset) / batch_size)
+    val_iters_per_epoch = int(np.round(len(val_loader.dataset) / batch_size))
     im_data,im_info,num_boxes,gt_boxes = input_data
     fasterRCNN.eval()
     all_boxes = [[[[]for _ in range(num_class)] for _ in range(batch_size *num_segments)]
@@ -617,7 +618,7 @@ def validate(val_loader,fasterRCNN,epoch,num_class,num_segments,vis,session,
     
     ap = precision_recall(tp_labels,fp_labels,fn_labels,num_class)
     for n in range(1,num_class):
-        for key, v in activity2id.items():
+        for key, v in activity2id.items(): 
           if v == n :
             print(f"Class '{n}' ({key}) - AveragePrecision: {ap[n-1]}")
             ap_out = ('Class {0} ({1}) - AveragePrecision: {2}').format(n,key,ap[n-1])

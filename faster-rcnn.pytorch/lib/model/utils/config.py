@@ -306,7 +306,7 @@ __C.CROP_RESIZE_WITH_MAX_POOL = True
 # -----------------------------------------------------------------------------
 __C.LOG = edict()
 
-__C.LOG.ROOT_LOG_DIR = "/home/malar/git_sam/Action-Proposal-Networks/faster-rcnn.pytorch/logs/"
+__C.LOG.ROOT_LOG_DIR = "/mnt/AI_RAID/VIRAT/actev-data-repo/logs"
 # -----------------------------------------------------------------------------
 # Focal  loss options
 # -----------------------------------------------------------------------------

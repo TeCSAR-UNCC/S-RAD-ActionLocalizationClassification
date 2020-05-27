@@ -25,6 +25,35 @@ class VideoRecord(object):
     def num_frames(self):
         return int(self._data[1])
 
+activity2id_hard = {
+    "BG": 0,  # background
+    "activity_gesturing": 1,
+    "Closing": 2,
+    "Opening": 3,
+    "Interacts": 4,
+    "Exiting": 5,
+    "Entering": 6,
+    "Talking": 7,
+    "Transport_HeavyCarry": 8,
+    "Unloading": 9,
+    "Pull": 10,
+    "Loading": 11,
+    "Open_Trunk": 12,
+    "Closing_Trunk": 13,
+    "Riding": 14,
+    "specialized_texting_phone": 15,
+    "Person_Person_Interaction": 16,
+    "specialized_talking_phone": 17,
+    "activity_running": 18,
+    "PickUp": 19,
+    "specialized_using_tool": 20,
+    "SetDown": 21,
+    "activity_crouching": 22,
+    "activity_sitting": 23,
+    "Object_Transfer": 24,
+    "Push": 25,
+    "PickUp_Person_Vehicle": 26
+    }
     
 
 activity2id = {
@@ -159,7 +188,10 @@ class VIRAT_dataset(data.Dataset):
                             bbox_new =[]
                             bbox = (i[2:6])*im_scale
                             bbox_new[0:4] = bbox
-                            bbox_new[4:]=i[6:6+self.num_class]
+                            #change to train only hard class
+                            #bbox_new[4:] = i[6:7]
+                            #bbox_new[5:] = i[10:10+self.num_class -1]
+                            bbox_new[4:]=i[6:6+self.num_class]#change here to train only less hard class
                             bboxes[count,:]+=bbox_new
                             count+=1
                             
