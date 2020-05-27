@@ -257,8 +257,12 @@ def compute_tp_fp(all_boxes,gtlabels,gtbb,num_class,tp_labels,fp_labels,fn_label
     return tp_labels,fp_labels,fn_labels
 
 
-def check_rootfolders(store_name):
+def check_rootfolders(store_name,dataset):
     """Create log and model folder"""
+    if dataset == 'virat':
+      cfg.LOG.ROOT_LOG_DIR = cfg.LOG.VIRAT_LOG_DIR
+    elif dataset == 'ava':
+      cfg.LOG.ROOT_LOG_DIR = cfg.LOG.AVA_LOG_DIR
     folders_util = [cfg.LOG.ROOT_LOG_DIR, os.path.join(cfg.LOG.ROOT_LOG_DIR, store_name)]
     for folder in folders_util:
         if not os.path.exists(folder):

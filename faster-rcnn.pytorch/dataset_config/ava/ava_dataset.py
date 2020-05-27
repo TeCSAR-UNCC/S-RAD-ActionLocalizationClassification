@@ -4,8 +4,12 @@
 import logging
 import numpy as np
 import torch
+import cv2 
 
 from . import ava_helper as ava_helper
+from . import meters as meters
+#from . import utils as utils
+from . import cv2_transform as cv2_transform
 logger = logging.getLogger(__name__)
 
 class Ava(torch.utils.data.Dataset):
@@ -13,16 +17,39 @@ class Ava(torch.utils.data.Dataset):
     AVA Dataset
     """
 
-    def __init__(self, cfg,split):
+    def __init__(self, cfg,split,num_segments,dense_sample=True,uniform_sample= True,
+                 random_sample = False,strided_sample = False):
         self.cfg = cfg
         self._split = split
-        self._sample_rate = cfg.AVA.SAMPLING_RATE
-        self._video_length = cfg.AVA.NUM_FRAMES
-        self._seq_len = self._video_length * self._sample_rate
-        #self._num_classes = cfg.MODEL.NUM_CLASSES
+        #self._sample_rate = cfg.AVA.SAMPLING_RATE 
+        self.num_segments = num_segments
+        #self._video_length = cfg.AVA.NUM_FRAMES
+        #self._seq_len = self._video_length * self._sample_rate
+        self._num_classes = cfg.AVA.NUM_CLASSES
+        self.ground_truth = cfg.AVA.GT_BOXES
+        self.fps = cfg.AVA.TARGET_FPS
+        self.dense_sample = dense_sample
+        self.uniform_sample = uniform_sample
+        self.random_sample = random_sample
+        self.strided_sample = strided_sample
         # Augmentation params.
         self._data_mean = cfg.AVA.MEAN
         self._data_std = cfg.AVA.STD
+        self._use_bgr = cfg.AVA.BGR
+        self.random_horizontal_flip = cfg.AVA.RANDOM_FLIP
+        if self._split == "train":
+            self._crop_size = cfg.AVA.TRAIN_CROP_SIZE
+            self._jitter_min_scale = cfg.AVA.TRAIN_JITTER_SCALES[0]
+            self._jitter_max_scale = cfg.AVA.TRAIN_JITTER_SCALES[1]
+            self._use_color_augmentation = cfg.AVA.TRAIN_USE_COLOR_AUGMENTATION
+            self._pca_jitter_only = cfg.AVA.TRAIN_PCA_JITTER_ONLY
+            self._pca_eigval = cfg.AVA.TRAIN_PCA_EIGVAL
+            self._pca_eigvec = cfg.AVA.TRAIN_PCA_EIGVEC
+        else:
+            self._crop_size = cfg.AVA.TEST_CROP_SIZE
+            self._test_force_flip = cfg.AVA.TEST_FORCE_FLIP
+
+
         self._load_data(cfg)
 
     def _load_data(self, cfg):
@@ -60,9 +87,9 @@ class Ava(torch.utils.data.Dataset):
             self._keyframe_indices, self._keyframe_boxes_and_labels
         )
 
-        self.print_summary()
+        #self.print_summary()
 
-    def print_summary(self):
+    '''def print_summary(self):
         logger.info("=== AVA dataset summary ===")
         logger.info("Split: {}".format(self._split))
         logger.info("Number of videos: {}".format(len(self._image_paths)))
@@ -71,7 +98,7 @@ class Ava(torch.utils.data.Dataset):
         )
         logger.info("Number of frames: {}".format(total_frames))
         logger.info("Number of key frames: {}".format(len(self)))
-        logger.info("Number of boxes: {}.".format(self._num_boxes_used))
+        logger.info("Number of boxes: {}.".format(self._num_boxes_used))'''
 
     def __len__(self):
         return len(self._keyframe_indices)
@@ -95,7 +122,7 @@ class Ava(torch.utils.data.Dataset):
         boxes[:, [0, 2]] *= width
         boxes[:, [1, 3]] *= height
         boxes = cv2_transform.clip_boxes_to_image(boxes, height, width)
-
+        #boxes = transforms.ava_clip_boxes_to_image(boxes, height, width)
         # `transform.py` is list of np.array. However, for AVA, we only have
         # one np.array.
         boxes = [boxes]
@@ -150,8 +177,13 @@ class Ava(torch.utils.data.Dataset):
             raise NotImplementedError(
                 "Unsupported split mode {}".format(self._split)
             )
-
-        # Convert image to CHW keeping BGR order.
+        
+        #im_size_min= min(height,width)
+        #im_scale = float(self._img_scale[0]/im_size_min)
+        #imgs = [cv2.resize(img, None, None, fx=im_scale, fy=im_scale,
+        #            interpolation=cv2.INTER_LINEAR)for img in imgs]
+        # Convert image to CHW 
+        # keeping BGR order
         imgs = [cv2_transform.HWC2CHW(img) for img in imgs]
 
         # Image [0, 255] -> [0, 1].
@@ -164,6 +196,10 @@ class Ava(torch.utils.data.Dataset):
             ).astype(np.float32)
             for img in imgs
         ]
+
+        '''imgs = [
+            np.ascontiguousarray(img).astype(np.float32)for img in imgs
+        ]'''
 
         # Do color augmentation (after divided by 255.0).
         if self._split == "train" and self._use_color_augmentation:
@@ -330,13 +366,45 @@ class Ava(torch.utils.data.Dataset):
                 "ori_boxes" and "metadata".
         """
         video_idx, sec_idx, sec, center_idx = self._keyframe_indices[idx]
+
+        if self.dense_sample:  # i3d dense sample
+            sample_pos = max(1, 1 + self.fps - 64)
+            t_stride = 64 // self.num_segments
+            start_idx = 0 if sample_pos == 1 else np.random.randint(0, sample_pos - 1)
+            seq = [(idx * t_stride + start_idx) % (self.fps) for idx in range(self.num_segments)]
+            seq = [element+center_idx for element in seq]       
+        elif self.uniform_sample:  # normal sample
+            average_duration = (self.fps) // self.num_segments
+            if average_duration > 0:
+                seq = np.multiply(list(range(self.num_segments)), average_duration) + np.random.randint(average_duration,
+                                       size=self.num_segments)
+            seq = [element+center_idx for element in seq] 
+        elif self.random_sample:
+            seq = np.sort(np.random.randint(self.fps + 1, size=self.num_segments))
+            seq = [element+center_idx for element in seq]
+        elif self.strided_sample:
+            average_duration = (self.fps) // self.num_segments
+            if average_duration > 0:
+                seq = np.multiply(list(range(self.num_segments)), average_duration) + average_duration//2
+                seq = [element+center_idx for element in seq]
+        else:
+            seq = np.zeros((self.num_segments,)) 
+            seq = [element+center_idx for element in seq]   
+            
+        #assert that seq stays within the sequence/clip selected
+        for seq_idx in range(len(seq)):
+         if seq[seq_idx] < center_idx:
+            seq[seq_idx] = center_idx
+         elif seq[seq_idx] >= (self.fps)+center_idx: #num_frames:
+            seq[seq_idx] = ((self.fps)+center_idx) - 1
+
         # Get the frame idxs for current clip.
-        seq = utils.get_sequence(
-            center_idx,
-            self._seq_len // 2,
-            self._sample_rate,
-            num_frames=len(self._image_paths[video_idx]),
-        )
+        #seq = utils.get_sequence(
+        #    center_idx,
+        #    self._seq_len // 2,
+        #    self._sample_rate,
+        #    num_frames=len(self._image_paths[video_idx]),
+        #)
 
         clip_label_list = self._keyframe_boxes_and_labels[video_idx][sec_idx]
         assert len(clip_label_list) > 0
@@ -353,10 +421,11 @@ class Ava(torch.utils.data.Dataset):
         ori_boxes = boxes.copy()
 
         # Load images of current clip.
-        image_paths = [self._image_paths[video_idx][frame] for frame in seq]
-        imgs = utils.retry_load_images(
+        image_paths = [self._image_paths[video_idx][frame-1] for frame in seq]
+        imgs = meters.retry_load_images(
             image_paths, backend=self.cfg.AVA.IMG_PROC_BACKEND
         )
+        
         if self.cfg.AVA.IMG_PROC_BACKEND == "pytorch":
             # T H W C -> T C H W.
             imgs = imgs.permute(0, 3, 1, 2)
@@ -371,7 +440,7 @@ class Ava(torch.utils.data.Dataset):
             imgs, boxes = self._images_and_boxes_preprocessing_cv2(
                 imgs, boxes=boxes
             )
-
+            imgs = imgs.permute(1,0,2,3)
         # Construct label arrays.
         label_arrs = np.zeros((len(labels), self._num_classes), dtype=np.int32)
         for i, box_labels in enumerate(labels):
@@ -380,15 +449,25 @@ class Ava(torch.utils.data.Dataset):
                 if label == -1:
                     continue
                 assert label >= 1 and label <= 80
-                label_arrs[i][label - 1] = 1
-
-        imgs = utils.pack_pathway_output(self.cfg, imgs)
-        metadata = [[video_idx, sec]] * len(boxes)
-
+            #    label_arrs[i][label - 1] = 1
+                label_arrs[i][label] = 1
+        #imgs = utils.pack_pathway_output(self.cfg, imgs)
+        metadata = [video_idx, sec] #* len(boxes) #changed here
+        
+        gt = np.zeros(((self.ground_truth),self._num_classes + 4),dtype = np.float32)
+        for i,labels in enumerate(label_arrs):
+            gt[i][:4] = boxes[i]
+            gt[i][4:] = label_arrs[i]
+        gt = np.repeat((np.expand_dims(gt,axis=0)),imgs.shape[0],axis=0)
+        im_info = np.zeros((imgs.shape[0],3),dtype=np.float32)
+        num_boxes = np.zeros((imgs.shape[0]),dtype=np.float32)
+        for i,image in enumerate(imgs):
+            im_info[i,:] = (image.shape[1],image.shape[2],(image.shape[1] / image.shape[2]))
+            num_boxes[i] = boxes.shape[0]
         extra_data = {
-            "boxes": boxes,
-            "ori_boxes": ori_boxes,
+           # "boxes": boxes,
+           # "ori_boxes": ori_boxes,
             "metadata": metadata,
         }
 
-        return imgs, label_arrs, idx, extra_data
+        return imgs, gt, num_boxes,im_info,extra_data 

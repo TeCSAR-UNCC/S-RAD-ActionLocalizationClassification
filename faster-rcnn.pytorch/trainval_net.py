@@ -23,12 +23,14 @@ import torch.nn as nn
 import torch.optim as optim
 import torchvision
 from statistics import mean 
+from operator import itemgetter
 
 from torch.utils.data.sampler import Sampler
-from data_loader.data_load import VIRAT_dataset
+from dataset_config.virat.data_load import *
 
-from dataset_config.ava_dataset import Ava
-from dataset_config.transforms import *
+from dataset_config.ava.ava_dataset import *
+from dataset_config.ava.meters import *
+from dataset_config.virat.transforms import *
 from tensorboardX import SummaryWriter
 
 import multiprocessing
@@ -42,7 +44,7 @@ from model.roi_layers import nms
 from model.rpn.bbox_transform import bbox_transform_inv,cpu_bbox_overlaps_batch, \
           bbox_transform_batch,cpu_bbox_overlaps,clip_boxes
 
-from data_loader.data_load import activity2id,activity2id_hard
+#from dataset_config.virat.data_load import activity2id,activity2id_hard
 from model.faster_rcnn.resnet import resnet
 
 def parse_args():
@@ -111,12 +113,12 @@ def parse_args():
   parser.add_argument('--strided_sample', default=False, action="store_true", 
   help='use dense sample for video dataset')
 
-#loss type
+  #loss type
   parser.add_argument('--loss_type',type=str,default='sigmoid',help="""\
       Loss type for training the network ('softmax', 'sigmoid', 'focal').\
       """)
 
-# config optimization
+  # config optimization
   parser.add_argument('--o', dest='optimizer',
                       help='training optimizer',
                       default="sgd", type=str)
@@ -176,6 +178,8 @@ def main():
       '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '15']
   if args.dataset == "ava":args.set_cfgs = ['ANCHOR_SCALES', '[2 , 4, 6]', 'ANCHOR_RATIOS', 
       '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '15']
+  if args.dataset == "ucfsport":args.set_cfgs = ['ANCHOR_SCALES', '[8 , 16, 32]', 'ANCHOR_RATIOS', 
+      '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '1']
   args.cfg_file = "cfgs/{}.yml".format(args.net)
   if args.cfg_file is not None:
     cfg_from_file(args.cfg_file)
@@ -191,10 +195,20 @@ def main():
   # train set
   # -- Note: Use validation set and disable the flipped to enable faster loading.
   cfg.USE_GPU_NMS = args.cuda
-
-  output_dir = cfg.VIRAT.output_model_dir + "/" + args.net + "/" + args.dataset
-  if not os.path.exists(output_dir):
+  if args.dataset == 'virat':
+      output_dir = cfg.VIRAT.output_model_dir + "/" + args.net + "/" + args.dataset
+      if not os.path.exists(output_dir):
           os.makedirs(output_dir)
+  elif args.dataset =='ava':
+      output_dir = cfg.AVA.output_model_dir + "/" + args.net + "/" + args.dataset
+      if not os.path.exists(output_dir):
+          os.makedirs(output_dir)
+  elif args.dataset =='ucfsport':
+      output_dir = cfg.UCFSPORT.output_model_dir + "/" + args.net + "/" + args.dataset
+      if not os.path.exists(output_dir):
+          os.makedirs(output_dir)
+  else:
+    print("dataset is not defined ")
   
   #visualisation 
   vis = args.vis
@@ -202,15 +216,18 @@ def main():
   #log initialisation
   args.store_name = '_'.join(
         ['ACT_D', args.dataset,args.net,'segment%d' % args.num_segments,'e{}'.format(args.max_epochs),'session%d'%args.session])
-  check_rootfolders(args.store_name)
-  log_training = open(os.path.join(cfg.LOG.ROOT_LOG_DIR, args.store_name, 'log.csv'), 'w')
-  with open(os.path.join(cfg.LOG.ROOT_LOG_DIR, args.store_name, 'args.txt'), 'w') as f:
-        f.write(str(args))
-  logger = SummaryWriter(log_dir=os.path.join(cfg.LOG.ROOT_LOG_DIR, args.store_name))
-
+  check_rootfolders(args.store_name,args.dataset)
+  
   #dataloader 
   if args.dataset == 'virat':
     num_class = cfg.VIRAT.NUM_CLASS
+
+    log_training = open(os.path.join(cfg.LOG.VIRAT_LOG_DIR, args.store_name, 'log.csv'), 'w')
+    with open(os.path.join(cfg.LOG.VIRAT_LOG_DIR, args.store_name, 'args.txt'), 'w') as f:
+        f.write(str(args))
+    logger = SummaryWriter(log_dir=os.path.join(cfg.LOG.VIRAT_LOG_DIR, args.store_name))
+
+
     normalize = GroupNormalize(cfg.VIRAT.INPUT_MEAN, cfg.VIRAT.INPUT_STD)
     train_loader = torch.utils.data.DataLoader(
         VIRAT_dataset(cfg.VIRAT.TRAIN_DATA,cfg.VIRAT.NUM_CLASS,cfg,cfg.VIRAT.FRAMELIST_TRAIN, 
@@ -240,15 +257,43 @@ def main():
         num_workers=args.num_workers, pin_memory=True)
 
   elif args.dataset == 'ava':
-    train_loader = torch.utils.data.DataLoader(Ava(cfg,split = 'train'))
+
+    num_class = cfg.AVA.NUM_CLASSES
+    
+    log_training = open(os.path.join(cfg.LOG.AVA_LOG_DIR, args.store_name, 'log.csv'), 'w')
+    with open(os.path.join(cfg.LOG.AVA_LOG_DIR, args.store_name, 'args.txt'), 'w') as f:
+        f.write(str(args))
+    logger = SummaryWriter(log_dir=os.path.join(cfg.LOG.AVA_LOG_DIR, args.store_name))
+
+
+    #initialise the dataloader
+    train_loader = torch.utils.data.DataLoader(Ava(cfg,split = "train",
+    num_segments=args.num_segments,dense_sample = args.dense_sample,
+    uniform_sample=args.uniform_sample,random_sample = args.random_sample,
+    strided_sample = args.strided_sample),batch_size=args.batch_size,
+    shuffle = False,num_workers=args.num_workers,pin_memory=True,
+    drop_last = True) #change shuffle to true
+    
+    val_loader = torch.utils.data.DataLoader(Ava(cfg,split = "val",
+    num_segments=args.num_segments,dense_sample = args.dense_sample,
+    uniform_sample=args.uniform_sample,random_sample = args.random_sample,
+    strided_sample = args.strided_sample),batch_size=args.batch_size,
+    shuffle = False,num_workers=args.num_workers,pin_memory=True,
+    drop_last = False)
+    
+    #initialise meters here
+    
+    ava_val_meter = AVAMeter(len(val_loader), cfg, mode="val",
+                             num_seg =args.num_segments)
+          
   else: 
     print("dataset is not defined")
-
-          # prevent something not % n_GPU
+  
+  # prevent something not % n_GPU
   if args.cuda:
     cfg.CUDA = True
 
-# initilize the network here.
+  # initilize the network here.
   if args.net == 'res50':
    fasterRCNN = resnet(num_class,num_layers =50, base_model ='resnet50', n_segments =args.num_segments,
                n_div =args.shift_div , place = args.shift_place,
@@ -366,8 +411,9 @@ def main():
   input_data = im_data,im_info,num_boxes,gt_boxes
   
   if args.evaluate:
-    meanprec = validate(val_loader, fasterRCNN,args.start_epoch,num_class, \
-            args.num_segments,vis,session,args.batch_size,input_data,cfg,log_training)
+    validate(val_loader, fasterRCNN,args.start_epoch,num_class, \
+             args.num_segments,vis,session,args.batch_size,input_data,\
+             cfg,log_training,ava_val_meter)
     
   for epoch in range(args.start_epoch, args.max_epochs + 1):
     
@@ -391,21 +437,37 @@ def main():
         adjust_learning_rate(optimizer, args.lr_decay_gamma)
         lr *= args.lr_decay_gamma
     #best_meanap = max(best_meanap,meanap) 
-    train(train_loader, fasterRCNN,lr,optimizer,
-    epoch,num_class,args.batch_size,session,mGPUs,logger,output_dir,
-    input_data,cfg,args.acc_step,log_training)
     
-    # evaluate on validation set
-    #if epoch % 3 == 0:
-    meanap = validate(val_loader, fasterRCNN,epoch,num_class, \
-              args.num_segments,vis,session,args.batch_size,input_data,cfg,log_training)
-    is_best = meanap > best_meanap
-    best_meanap = max(best_meanap,meanap)
-    print(f"best mean ap : [{best_meanap}]")
-    if epoch % 10== 0:
-       test_ap = validate(test_loader, fasterRCNN,epoch,num_class, \
-              args.num_segments,vis,session,args.batch_size,input_data,cfg,log_training)
-
+    
+    if args.dataset == 'virat':
+      train(train_loader, fasterRCNN,lr,optimizer,
+        epoch,num_class,args.batch_size,session,mGPUs,logger,output_dir,
+        input_data,cfg,args.acc_step,log_training)
+      ava_val_meter = None
+      # evaluate on validation set
+      #if epoch % 3 == 0:
+      #meanap = 
+      validate(val_loader, fasterRCNN,epoch,num_class, \
+      args.num_segments,vis,session,args.batch_size,input_data,cfg,\
+      log_training,ava_val_meter)
+      #is_best = meanap > best_meanap
+      #best_meanap = max(best_meanap,meanap)
+      #print(f"best mean ap : [{best_meanap}]")
+      if epoch % 10== 0:
+      # test_ap = 
+        validate(test_loader, fasterRCNN,epoch,num_class, \
+              args.num_segments,vis,session,args.batch_size,input_data,cfg,
+              log_training,ava_val_meter)
+    
+    elif args.dataset == 'ava':
+      train(train_loader, fasterRCNN,lr,optimizer,
+          epoch,num_class,args.batch_size,session,mGPUs,logger,output_dir,
+          input_data,cfg,args.acc_step,log_training)
+      if epoch % 2== 0:
+        validate(val_loader, fasterRCNN,epoch,num_class, \
+              args.num_segments,vis,session,args.batch_size,input_data,
+              cfg,log_training,ava_val_meter)
+ 
 def train(train_loader,fasterRCNN,lr,optimizer,epoch,num_class,batch_size,session,mGPUs,
           logger,output_dir,input_data,cfg,acc_step,log):
     
@@ -512,16 +574,16 @@ def train(train_loader,fasterRCNN,lr,optimizer,epoch,num_class,batch_size,sessio
         
 @torch.no_grad()
 def validate(val_loader,fasterRCNN,epoch,num_class,num_segments,vis,session,
-             batch_size,input_data,cfg,log):
+             batch_size,input_data,cfg,log,ava_val_meter):
     
     batch_time = AverageMeter()
-    val_iters_per_epoch = int(np.round(len(val_loader.dataset) / batch_size))
+    val_iters_per_epoch = int(len(val_loader))
     im_data,im_info,num_boxes,gt_boxes = input_data
     fasterRCNN.eval()
     all_boxes = [[[[]for _ in range(num_class)] for _ in range(batch_size *num_segments)]
                for _ in range(val_iters_per_epoch)]
     #limit the number of proposal per image across all the class
-    max_per_image = cfg.MAX_NUM_GT_BOXES
+    max_per_image = cfg.AVA.MAX_DET_IMG
     bins = 9 
     score_threshold = 0.1
     tp_labels = np.zeros((num_class,bins),dtype=int)
@@ -529,7 +591,11 @@ def validate(val_loader,fasterRCNN,epoch,num_class,num_segments,vis,session,
     fn_labels = np.zeros((num_class,bins),dtype=int)
     all_pred_box,all_gtbb,all_gtlabels,all_scores=[],[],[],[]
     end = time.time()
+    #data_iter = iter(val_loader)
+    
     for step,data in enumerate(val_loader):
+    #for step in range (500):
+        #data = next(data_iter)
         im_data.resize_(data[0].size()).copy_(data[0])
         gt_boxes.resize_(data[1].size()).copy_(data[1])
         num_boxes.resize_(data[2].size()).copy_(data[2])
@@ -538,7 +604,11 @@ def validate(val_loader,fasterRCNN,epoch,num_class,num_segments,vis,session,
         im_info = im_info.view(-1,3)
         gt_boxes= gt_boxes.view(-1,cfg.MAX_NUM_GT_BOXES,num_class+4)
         num_boxes = num_boxes.view(-1)
-        img_path = data[4]
+        if ava_val_meter:
+          meta = data[4]
+          if isinstance(meta["metadata"], (list,)):
+                for i in range(len(meta["metadata"])):
+                    meta["metadata"][i] = meta["metadata"][i].cpu().numpy()
         rois, cls_prob, bbox_pred = fasterRCNN(im_data, im_info, gt_boxes, num_boxes)
       
 
@@ -559,16 +629,19 @@ def validate(val_loader,fasterRCNN,epoch,num_class,num_segments,vis,session,
         pred_boxes = bbox_transform_inv(boxes, box_deltas,scores.shape[0])
         pred_boxes = clip_boxes(pred_boxes, im_info.data,scores.shape[0])   
 
-       #convert the prediction boxes and gt_boxes to the image size
-        gtbb = gt_boxes[:,:,0:4]
-        gtlabels = gt_boxes[:,:,4:]
-        pred_boxes /= data[3][0][1][2].item()
-        gtbb /= data[3][0][1][2].item()
+        if ava_val_meter:
+           pred_boxes /=(im_data.size(2)-1)
+        else:
+          #convert the prediction boxes and gt_boxes to the image size
+          gtbb = gt_boxes[:,:,0:4]
+          gtlabels = gt_boxes[:,:,4:]
+          pred_boxes /= data[3][0][1][2].item()
+          gtbb /= data[3][0][1][2].item()
       
-       #move the groudtruth to cpu
-        gtbb = gtbb.cpu().numpy()
-        gtlabels = gtlabels.cpu().numpy()
-
+          #move the groudtruth to cpu
+          gtbb = gtbb.cpu().numpy()
+          gtlabels = gtlabels.cpu().numpy()
+        count = 0 
        #calculate the predictions for each class in an image
         for image in range(pred_boxes.shape[0]):
           for class_id in range(1,num_class):
@@ -594,7 +667,7 @@ def validate(val_loader,fasterRCNN,epoch,num_class,num_segments,vis,session,
                image_scores=np.append(image_scores,sc)
               
             if len(image_scores) > max_per_image:
-            #take the image threshold value taking 15th entry  
+            #take the image threshold value taking 5th or 15th entry  
               image_thresh = np.sort(image_scores)[-max_per_image]
               for class_id in range(1, num_class):
                 if len(all_boxes[step][image][class_id]) > 0:
@@ -604,37 +677,55 @@ def validate(val_loader,fasterRCNN,epoch,num_class,num_segments,vis,session,
                   all_boxes[step][image][class_id] = []
           #if all_boxes[step][image].any()  
           det = np.asarray(all_boxes[step][image]) 
-          if det.size > 0:
+          if det.size == 0:
+            continue
+          else:
             all_boxes[step][image] = avg_iou(all_boxes[step][image],0.7)
-        
-          #calculate tp_fp_fn
-          tp_labels,fp_labels,fn_labels =compute_tp_fp(all_boxes[step][image],gtlabels[image],gtbb[image], \
+
+          if ava_val_meter:
+            if ((image % num_segments) == 0):
+              #if len(all_boxes[step][image]) > 5: #check for empty list
+              #   if not any(all_boxes[step][image]):
+              #      continue
+                
+             # else:
+                preds = all_boxes[step][image]
+                metadata = list(map(itemgetter(count),meta["metadata"]))
+                ava_val_meter.update_stats(preds,metadata)
+                count += 1
+
+          else:  
+            #calculate tp_fp_fn
+            tp_labels,fp_labels,fn_labels =compute_tp_fp(all_boxes[step][image],gtlabels[image],gtbb[image], \
                       num_class,tp_labels,fp_labels,fn_labels,bins)
         output = ('Test: [{0}/{1}]\t'
                 'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                 .format(step,(val_iters_per_epoch), batch_time=batch_time))
         print(output)
      
-    
-    ap = precision_recall(tp_labels,fp_labels,fn_labels,num_class)
-    for n in range(1,num_class):
-        for key, v in activity2id.items(): 
+    if ava_val_meter:
+       ava_val_meter.finalize_metrics(log)
+       ava_val_meter.reset()
+    else : 
+       ap = precision_recall(tp_labels,fp_labels,fn_labels,num_class)
+       for n in range(1,num_class):
+        for key, v in activity2id_hard.items(): #modfieed
           if v == n :
             print(f"Class '{n}' ({key}) - AveragePrecision: {ap[n-1]}")
             ap_out = ('Class {0} ({1}) - AveragePrecision: {2}').format(n,key,ap[n-1])
             log.write(ap_out + '\n')
-    output = (' completed step:{0}\n'
+       output = (' completed step:{0}\n'
               'tp_labels: {1}\n'
               'fp_labels: {2} \n' 
               'fn_labels: {3} \n'          
                            .format(step,tp_labels,fp_labels,fn_labels)) 
               
-    #print the mean average precision      
-    print(f"mAP for epoch [{epoch}]: {mean(ap)}")
-    mean_outap = ('mAP for epoch [{0}]: {1}'.format(epoch,mean(ap)))
-    log.write(output + '\n' + mean_outap + '\n')
-    log.flush()
-    return np.mean(ap)
+       #print the mean average precision      
+       print(f"mAP for epoch [{epoch}]: {mean(ap)}")
+       mean_outap = ('mAP for epoch [{0}]: {1}'.format(epoch,mean(ap)))
+       log.write(output + '\n' + mean_outap + '\n')
+       log.flush()
+    #return np.mean(ap)
 
 if __name__ == '__main__':
    main()    

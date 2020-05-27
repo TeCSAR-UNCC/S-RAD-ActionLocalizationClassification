@@ -78,12 +78,13 @@ def load_boxes_and_labels(cfg, mode):
             coordinates of box and 'box_labels` are the corresponding
             labels for the box.
     """
-    gt_lists = cfg.AVA.TRAIN_GT_BOX_LISTS if mode == "train" else []
+    gt_lists = cfg.AVA.TRAIN_GT_BOX_LISTS if mode == "train" else [cfg.AVA.GROUNDTRUTH_FILE] #changes here
     pred_lists = (
         cfg.AVA.TRAIN_PREDICT_BOX_LISTS
         if mode == "train"
         else cfg.AVA.TEST_PREDICT_BOX_LISTS
     )
+    
     ann_filenames = [
         os.path.join(cfg.AVA.ANNOTATION_DIR, filename)
         for filename in gt_lists + pred_lists

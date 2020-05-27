@@ -306,7 +306,8 @@ __C.CROP_RESIZE_WITH_MAX_POOL = True
 # -----------------------------------------------------------------------------
 __C.LOG = edict()
 
-__C.LOG.ROOT_LOG_DIR = "/mnt/AI_RAID/VIRAT/actev-data-repo/logs"
+__C.LOG.VIRAT_LOG_DIR = "/mnt/AI_RAID/VIRAT/logs"
+__C.LOG.AVA_LOG_DIR = "/mnt/AI_RAID/ava/logs"
 # -----------------------------------------------------------------------------
 # Focal  loss options
 # -----------------------------------------------------------------------------
@@ -330,7 +331,7 @@ __C.VIRAT.TEST_DATA = "/mnt/AI_RAID/actev-data-repo/dataset/test/"
 
 # num of class
 
-__C.VIRAT.NUM_CLASS = 30
+__C.VIRAT.NUM_CLASS = 27
 
 # Directory to the frame list 
 
@@ -349,12 +350,16 @@ __C.VIRAT.INPUT_STD  = [0.229, 0.224, 0.225]
 __C.VIRAT.output_model_dir = "/mnt/AI_RAID/VIRAT/actev-data-repo/models"
   
 
+
 # -----------------------------------------------------------------------------
 # AVA Dataset options
 # -----------------------------------------------------------------------------
 # Directory path of frames.
 __C.AVA =edict()
 __C.AVA.FRAME_DIR = "/mnt/AI_RAID/ava/frames/"
+
+# Output model directory
+__C.AVA.output_model_dir = "/mnt/AI_RAID/ava/models"
 
 # Directory path for files of frame lists.
 __C.AVA.FRAME_LIST_DIR = (
@@ -372,14 +377,21 @@ __C.AVA.TRAIN_LISTS = ["train.csv"]
 # Filenames of test samples list files.
 __C.AVA.TEST_LISTS = ["val.csv"]
 
+# Maximum per image detections across all class in AVA dataset
+
+__C.AVA.MAX_DET_IMG = 5
+
 # Filenames of box list files for training. Note that we assume files which
 # contains predicted boxes will have a suffix "predicted_boxes" in the
 # filename.
 __C.AVA.TRAIN_GT_BOX_LISTS = ["ava_train_v2.1.csv"]
 __C.AVA.TRAIN_PREDICT_BOX_LISTS = []
 
+# Maximum groudtruth in AVA
+__C.AVA.GT_BOXES = 15
+
 # Filenames of box list files for test.
-__C.AVA.TEST_PREDICT_BOX_LISTS = ["ava_val_predicted_boxes.csv"]
+__C.AVA.TEST_PREDICT_BOX_LISTS = []
 
 # This option controls the score threshold for the predicted boxes to use.
 __C.AVA.DETECTION_SCORE_THRESH = 0.9
@@ -416,6 +428,47 @@ __C.AVA.MEAN = [0.45, 0.45, 0.45]
 
 # The std value of the video raw pixels across the R G B channels.
 __C.AVA.STD = [0.225, 0.225, 0.225]
+
+# The spatial augmentation jitter scales for training.
+__C.AVA.TRAIN_JITTER_SCALES = [256, 320]
+
+# The spatial crop size for training.
+__C.AVA.TRAIN_CROP_SIZE = 224
+
+# The spatial crop size for testing.
+__C.AVA.TEST_CROP_SIZE = 256
+
+# Input videos may has different fps, convert it to the target video fps before
+# frame sampling.
+__C.AVA.TARGET_FPS = 30
+# If True, perform random horizontal flip on the video frames during training.
+__C.AVA.RANDOM_FLIP = True
+
+__C.AVA.NUM_CLASSES = 81
+# Training augmentation parameters
+# Whether to use color augmentation method.
+__C.AVA.TRAIN_USE_COLOR_AUGMENTATION = False
+
+# Whether to only use PCA jitter augmentation when using color augmentation
+# method (otherwise combine with color jitter method).
+__C.AVA.TRAIN_PCA_JITTER_ONLY = True
+
+# Eigenvalues for PCA jittering. Note PCA is RGB based.
+__C.AVA.TRAIN_PCA_EIGVAL = [0.225, 0.224, 0.229]
+
+# Eigenvectors for PCA jittering.
+__C.AVA.TRAIN_PCA_EIGVEC = [
+    [-0.5675, 0.7192, 0.4009],
+    [-0.5808, -0.0045, -0.8140],
+    [-0.5836, -0.6948, 0.4203],
+]
+
+# Whether to do horizontal flipping during test.
+__C.AVA.TEST_FORCE_FLIP = False
+
+# Whether to use full test set for validation split.
+__C.AVA.FULL_TEST_ON_VAL = False
+
 
 def _merge_a_into_b(a, b):
   """Merge config dictionary a into config dictionary b, clobbering the
