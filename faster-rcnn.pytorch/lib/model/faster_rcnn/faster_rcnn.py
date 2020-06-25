@@ -58,12 +58,7 @@ class _fasterRCNN(nn.Module):
         if self.training:
             roi_data = self.RCNN_proposal_target(rois, gt_boxes, num_boxes,val=0)
             rois, rois_label, rois_target, rois_inside_ws, rois_outside_ws = roi_data
-            rois_label = Variable(rois_label.view(-1,self.classes))#.long()) #modified
-            rois_target = Variable(rois_target.view(-1, rois_target.size(2)))
-            rois_inside_ws = Variable(rois_inside_ws.view(-1, rois_inside_ws.size(2)))
-            rois_outside_ws = Variable(rois_outside_ws.view(-1, rois_outside_ws.size(2)))
-            proposal_num = torch.nonzero(rois_label)[:,0]
-            class_num = torch.nonzero(rois_label)[:,1]
+            
 
         else:
             rois_label = None
@@ -89,7 +84,14 @@ class _fasterRCNN(nn.Module):
         # compute bbox offset
         bbox_pred = self.RCNN_bbox_pred(pooled_feat)
         if self.training and not self.class_agnostic:
+          if self.loss_type == 'focal' or self.loss_type == 'sigmoid':
             # select the corresponding columns according to roi labels
+            rois_label = Variable(rois_label.view(-1,self.classes))#.long()) #modified
+            rois_target = Variable(rois_target.view(-1, rois_target.size(2)))
+            rois_inside_ws = Variable(rois_inside_ws.view(-1, rois_inside_ws.size(2)))
+            rois_outside_ws = Variable(rois_outside_ws.view(-1, rois_outside_ws.size(2)))
+            proposal_num = torch.nonzero(rois_label)[:,0]
+            class_num = torch.nonzero(rois_label)[:,1]
             bbox_pred_view = bbox_pred.view(bbox_pred.size(0), int(bbox_pred.size(1) / 4), 4)
             bbox_pred_select = bbox_pred_view.new(bbox_pred.size(0), 1, 4).zero_()
             for i in range (proposal_num.shape[0]):
@@ -105,7 +107,10 @@ class _fasterRCNN(nn.Module):
 
         # compute object classification probability
         cls_score = self.RCNN_cls_score(pooled_feat)
-        cls_prob = torch.sigmoid(cls_score)
+        if self.loss_type == "focal" or self.loss_type == "sigmoid":
+           cls_prob = torch.sigmoid(cls_score)
+        if self.loss_type == "softmax":
+           cls_prob = torch.softmax(cls_score,1)
 
         RCNN_loss_cls = 0
         RCNN_loss_bbox = 0
@@ -113,13 +118,35 @@ class _fasterRCNN(nn.Module):
         if self.training:
             # classification loss
             #rois_label = rois_label.type_as(cls_score)
+            
             if self.loss_type == "focal":
                loss_gamma =cfg.FOCAL_GAMMA
                loss_alpha =cfg.FOCAL_ALPHA
                RCNN_loss_cls = focal_loss(rois_label, cls_score, loss_alpha, loss_gamma)
+               
             elif self.loss_type == "sigmoid":
                RCNN_loss_cls = F.binary_cross_entropy_with_logits(cls_score, rois_label)
+               
+            elif self.loss_type == "softmax":
+               rois_label = Variable(rois_label.view(-1,self.classes).long())
+               rois_label_select = rois_label.new(rois_label.size(0)).zero_()
+               proposal_num = torch.nonzero(rois_label)[:,0]
+               class_num = (torch.nonzero(rois_label)[:,1])
+               rois_label_select[proposal_num] = class_num
+               
 
+               rois_target = Variable(rois_target.view(-1, rois_target.size(2)))
+               rois_inside_ws = Variable(rois_inside_ws.view(-1, rois_inside_ws.size(2)))
+               rois_outside_ws = Variable(rois_outside_ws.view(-1, rois_outside_ws.size(2)))
+               
+               bbox_pred_view = bbox_pred.view(bbox_pred.size(0), int(bbox_pred.size(1) / 4), 4)
+               bbox_pred_select = torch.gather(bbox_pred_view, 1, rois_label_select.view(rois_label_select.size(0), 1, 1).expand(rois_label_select.size(0), 1, 4))
+               bbox_pred = bbox_pred_select.squeeze(1)
+               RCNN_loss_cls = F.cross_entropy(cls_score, rois_label_select)
+               
+            
+            
+            
             # bounding box regression L1 loss
             RCNN_loss_bbox = _smooth_l1_loss(bbox_pred, rois_target, rois_inside_ws, rois_outside_ws)
 

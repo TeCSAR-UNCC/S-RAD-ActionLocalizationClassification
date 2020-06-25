@@ -124,6 +124,7 @@ def make_temporal_shift(net, n_segment, n_div=8, place='blockres'):
                 for i, b in enumerate(blocks):
                     if i % n_round == 0:
                         blocks[i].conv1 = TemporalShift(b.conv1, n_segment=this_segment, n_div=n_div)
+                        #blocks[i].conv2 = TemporalShift(b.conv2, n_segment=this_segment, n_div=n_div)
                 return nn.Sequential(*blocks)
 
             net.layer1 = make_block_temporal(net.layer1, n_segment_list[0])

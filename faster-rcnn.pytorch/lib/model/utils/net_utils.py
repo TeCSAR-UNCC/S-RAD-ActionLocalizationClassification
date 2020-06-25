@@ -9,6 +9,8 @@ import os
 import cv2
 import pdb
 import random
+from tensorboardX import SummaryWriter
+from statistics import mean 
 
 from model.rpn.bbox_transform import cpu_bbox_overlaps
 
@@ -263,6 +265,8 @@ def check_rootfolders(store_name,dataset):
       cfg.LOG.ROOT_LOG_DIR = cfg.LOG.VIRAT_LOG_DIR
     elif dataset == 'ava':
       cfg.LOG.ROOT_LOG_DIR = cfg.LOG.AVA_LOG_DIR
+    elif dataset == 'ucfsport':
+      cfg.LOG.ROOT_LOG_DIR = cfg.LOG.UCFSPORT_LOG_DIR
     folders_util = [cfg.LOG.ROOT_LOG_DIR, os.path.join(cfg.LOG.ROOT_LOG_DIR, store_name)]
     for folder in folders_util:
         if not os.path.exists(folder):
@@ -464,3 +468,44 @@ def _affine_theta(rois, input_size):
       (x1 + x2 - width + 1) / (width - 1)], 1).view(-1, 2, 3)
 
     return theta
+
+def log_info(cfg,store_name = None,dataset = None,args = None) :
+  if dataset == 'ava':
+    log_training = open(os.path.join(cfg.LOG.AVA_LOG_DIR, store_name, 'log.csv'), 'w')
+    with open(os.path.join(cfg.LOG.AVA_LOG_DIR, store_name, 'args.txt'), 'w') as f:
+        f.write(str(args))
+    logger = SummaryWriter(log_dir=os.path.join(cfg.LOG.AVA_LOG_DIR, store_name))
+  elif dataset == 'virat':
+    log_training = open(os.path.join(cfg.LOG.VIRAT_LOG_DIR, store_name, 'log.csv'), 'w')
+    with open(os.path.join(cfg.LOG.VIRAT_LOG_DIR, store_name, 'args.txt'), 'w') as f:
+        f.write(str(args))
+    logger = SummaryWriter(log_dir=os.path.join(cfg.LOG.VIRAT_LOG_DIR, store_name))
+    
+  elif dataset == 'ucfsport':
+    log_training = open(os.path.join(cfg.LOG.UCFSPORT_LOG_DIR, store_name, 'log.csv'), 'w')
+    with open(os.path.join(cfg.LOG.UCFSPORT_LOG_DIR, store_name, 'args.txt'), 'w') as f:
+        f.write(str(args))
+    logger = SummaryWriter(log_dir=os.path.join(cfg.LOG.UCFSPORT_LOG_DIR, store_name))
+  return log_training,logger
+
+
+def print_ap(tp_labels,fp_labels,fn_labels,num_class,log,step,epoch,dictio,ap):
+  
+      for n in range(1,num_class):
+        for key, v in dictio.items(): #modfieed
+          if v == n :
+            print(f"Class '{n}' ({key}) - AveragePrecision: {ap[n-1]}")
+            ap_out = ('Class {0} ({1}) - AveragePrecision: {2}').format(n,key,ap[n-1])
+            log.write(ap_out + '\n')
+      output = (' completed step:{0}\n'
+              'tp_labels: {1}\n'
+              'fp_labels: {2} \n' 
+              'fn_labels: {3} \n'          
+                           .format(step,tp_labels,fp_labels,fn_labels)) 
+                                         
+      #print the mean average precision      
+      print(f"mAP for epoch [{epoch}]: {mean(ap)}")
+      mean_outap = ('mAP for epoch [{0}]: {1}'.format(epoch,mean(ap)))
+      log.write(output + '\n' + mean_outap + '\n')
+      log.flush()
+    

@@ -17,13 +17,14 @@ from model.faster_rcnn.faster_rcnn import _fasterRCNN
 import pdb
 
 class vgg16(_fasterRCNN):
-  def __init__(self, classes, pretrained=False, class_agnostic=False):
-    self.model_path = 'data/pretrained_model/vgg16_caffe.pth'
+  def __init__(self, classes, pretrained=False, class_agnostic=False,loss_type = 'sigmoid'):
+    self.model_path = 'pretrained_model/vgg16_caffe.pth'
     self.dout_base_model = 512
     self.pretrained = pretrained
     self.class_agnostic = class_agnostic
+    self.loss_type = loss_type
 
-    _fasterRCNN.__init__(self, classes, class_agnostic)
+    _fasterRCNN.__init__(self, classes, class_agnostic,loss_type)
 
   def _init_modules(self):
     vgg = models.vgg16()

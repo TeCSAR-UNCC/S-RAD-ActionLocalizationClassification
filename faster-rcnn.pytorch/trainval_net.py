@@ -11,7 +11,7 @@ import _init_paths
 import os
 import sys
 import numpy as np
-import argparse
+from args import parse_args
 import pprint
 import pdb
 import time
@@ -22,16 +22,13 @@ from torch.autograd import Variable
 import torch.nn as nn
 import torch.optim as optim
 import torchvision
-from statistics import mean 
+
 from operator import itemgetter
 
 from torch.utils.data.sampler import Sampler
-from dataset_config.virat.data_load import *
+from data_loader.data_loader import *
 
-from dataset_config.ava.ava_dataset import *
-from dataset_config.ava.meters import *
-from dataset_config.virat.transforms import *
-from tensorboardX import SummaryWriter
+from torch.utils.data._utils.collate import default_collate
 
 import multiprocessing
 multiprocessing.set_start_method('spawn', True)
@@ -46,126 +43,7 @@ from model.rpn.bbox_transform import bbox_transform_inv,cpu_bbox_overlaps_batch,
 
 #from dataset_config.virat.data_load import activity2id,activity2id_hard
 from model.faster_rcnn.resnet import resnet
-
-def parse_args():
-  """
-  Parse input arguments
-  """
-  parser = argparse.ArgumentParser(description='Train a Fast R-CNN network')
-  
-  parser.add_argument('--net', dest='net',
-                    help='vgg16, res101',
-                    default='vgg16', type=str)
-  parser.add_argument('--start_epoch', dest='start_epoch',
-                      help='starting epoch',
-                      default=1, type=int)
-  parser.add_argument('--epochs', dest='max_epochs',
-                      help='number of epochs to train',
-                      default=20, type=int)
-  parser.add_argument('--disp_interval', dest='disp_interval',
-                      help='number of iterations to display',
-                      default=100, type=int)
-  parser.add_argument('--checkpoint_interval', dest='checkpoint_interval',
-                      help='number of iterations to display',
-                      default=10000, type=int)
-
-  parser.add_argument('--acc_step',help='Gradient Accumalation step', default=1,
-                      type=int)
-  parser.add_argument('--nw', dest='num_workers',
-                      help='number of worker to load data',
-                      default=0, type=int)
-  parser.add_argument('--cuda', dest='cuda',
-                      help='whether use CUDA',
-                      action='store_true')
-  parser.add_argument('--ls', dest='large_scale',
-                      help='whether use large imag scale',
-                      action='store_true')                      
-  parser.add_argument('--mGPUs', dest='mGPUs',
-                      help='whether use multiple GPUs',
-                      action='store_true')
-  parser.add_argument('--bs', dest='batch_size',
-                      help='batch_size',
-                      default=1, type=int)
-  parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
-                    help='evaluate model on validation set')
-  parser.add_argument('--cag', dest='class_agnostic',
-                      help='whether perform class_agnostic bbox regression',
-                      action='store_true')
-
-#temporal shift module
-  parser.add_argument('--shift', default=False, action="store_true", help='use shift for models')
-  parser.add_argument('--shift_div', default=8, type=int, help='number of div for shift (default: 8)')
-  parser.add_argument('--shift_place', default='blockres', type=str, help='place for shift (default: stageres)')
-  parser.add_argument('--pretrain', type=str, default='imagenet')
-  parser.add_argument('--tune_from', type=str, default=None, help='fine-tune from checkpoint')
-
-# dataset arguments from temporal segment networks
-  parser.add_argument('--dataset', dest='dataset',
-                      help='training dataset',
-                      default='virat', type=str)
-  parser.add_argument('--num_segments', type=int, default=3)
-  parser.add_argument('--dense_sample', default=False, action="store_true", 
-  help='use dense sample for video dataset')
-  parser.add_argument('--uniform_sample', default=False, action="store_true", 
-  help='use dense sample for video dataset')
-  parser.add_argument('--random_sample', default=False, action="store_true", 
-  help='use dense sample for video dataset')
-  parser.add_argument('--strided_sample', default=False, action="store_true", 
-  help='use dense sample for video dataset')
-
-  #loss type
-  parser.add_argument('--loss_type',type=str,default='sigmoid',help="""\
-      Loss type for training the network ('softmax', 'sigmoid', 'focal').\
-      """)
-
-  # config optimization
-  parser.add_argument('--o', dest='optimizer',
-                      help='training optimizer',
-                      default="sgd", type=str)
-  parser.add_argument('--lr_type', default='step', type=str,
-                    metavar='LRtype', help='learning rate type')
-  parser.add_argument('--lr', dest='lr',
-                      help='starting learning rate',
-                      default=0.001, type=float)
-  parser.add_argument('--lr_decay_step', dest='lr_decay_step',
-                      help='step to do learning rate decay, unit is epoch',
-                      default=5, type=int)
-  parser.add_argument('--lr_decay_gamma', dest='lr_decay_gamma',
-                      help='learning rate decay ratio',
-                      default=0.1, type=float)
-
-# set training session
-  parser.add_argument('--s', dest='session',
-                      help='training session',
-                      default=1, type=int) 
-# set log and model root folders
-  parser.add_argument('--root_log',type=str, default='log')
-  parser.add_argument('--root_model', type=str, default='checkpoint')
-
-# resume trained model
-  parser.add_argument('--r', dest='resume',
-                      help='resume checkpoint or not',
-                      default=False, type=bool)
-  parser.add_argument('--checksession', dest='checksession',
-                      help='checksession to load model',
-                      default=1, type=int)
-  parser.add_argument('--checkepoch', dest='checkepoch',
-                      help='checkepoch to load model',
-                      default=1, type=int)
-  parser.add_argument('--checkpoint', dest='checkpoint',
-                      help='checkpoint to load model',
-                      default=0, type=int)
-# log and diaplay
-  parser.add_argument('--use_tfb', dest='use_tfboard',
-                      help='whether use tensorboard',
-                      action='store_true')
-#visualisation 
-  parser.add_argument('--vis', dest='vis',
-                      help='visualization mode',
-                      action='store_true')
-
-  args = parser.parse_args()
-  return args
+from model.faster_rcnn.vgg16 import vgg16
 
 def main():
   args = parse_args()
@@ -179,7 +57,7 @@ def main():
   if args.dataset == "ava":args.set_cfgs = ['ANCHOR_SCALES', '[2 , 4, 6]', 'ANCHOR_RATIOS', 
       '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '15']
   if args.dataset == "ucfsport":args.set_cfgs = ['ANCHOR_SCALES', '[8 , 16, 32]', 'ANCHOR_RATIOS', 
-      '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '1']
+      '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '2']
   args.cfg_file = "cfgs/{}.yml".format(args.net)
   if args.cfg_file is not None:
     cfg_from_file(args.cfg_file)
@@ -196,14 +74,17 @@ def main():
   # -- Note: Use validation set and disable the flipped to enable faster loading.
   cfg.USE_GPU_NMS = args.cuda
   if args.dataset == 'virat':
+      num_class = cfg.VIRAT.NUM_CLASS
       output_dir = cfg.VIRAT.output_model_dir + "/" + args.net + "/" + args.dataset
       if not os.path.exists(output_dir):
           os.makedirs(output_dir)
   elif args.dataset =='ava':
+      num_class = cfg.AVA.NUM_CLASSES
       output_dir = cfg.AVA.output_model_dir + "/" + args.net + "/" + args.dataset
       if not os.path.exists(output_dir):
           os.makedirs(output_dir)
   elif args.dataset =='ucfsport':
+      num_class = cfg.UCFSPORT.NUM_CLASSES
       output_dir = cfg.UCFSPORT.output_model_dir + "/" + args.net + "/" + args.dataset
       if not os.path.exists(output_dir):
           os.makedirs(output_dir)
@@ -218,83 +99,37 @@ def main():
         ['ACT_D', args.dataset,args.net,'segment%d' % args.num_segments,'e{}'.format(args.max_epochs),'session%d'%args.session])
   check_rootfolders(args.store_name,args.dataset)
   
-  #dataloader 
+  #logging
+  log_training,logger = log_info(cfg,args.store_name,args.dataset,args= args)
+  
+  #dataloader
+
+  train_loader = construct_loader(cfg,dataset = args.dataset,num_segments = args.num_segments,
+        batch_size = args.batch_size,split = 'train',input_sampling = True)
+  val_loader = construct_loader(cfg,dataset = args.dataset,num_segments = args.num_segments,
+        batch_size = args.batch_size,split = 'val',input_sampling = True)
   if args.dataset == 'virat':
-    num_class = cfg.VIRAT.NUM_CLASS
-
-    log_training = open(os.path.join(cfg.LOG.VIRAT_LOG_DIR, args.store_name, 'log.csv'), 'w')
-    with open(os.path.join(cfg.LOG.VIRAT_LOG_DIR, args.store_name, 'args.txt'), 'w') as f:
-        f.write(str(args))
-    logger = SummaryWriter(log_dir=os.path.join(cfg.LOG.VIRAT_LOG_DIR, args.store_name))
-
-
-    normalize = GroupNormalize(cfg.VIRAT.INPUT_MEAN, cfg.VIRAT.INPUT_STD)
-    train_loader = torch.utils.data.DataLoader(
-        VIRAT_dataset(cfg.VIRAT.TRAIN_DATA,cfg.VIRAT.NUM_CLASS,cfg,cfg.VIRAT.FRAMELIST_TRAIN, 
-        num_segments=args.num_segments,input_size = cfg.VIRAT.INPUT_SIZE,
-        transform=torchvision.transforms.Compose([ToTorchFormatTensor(div=1),normalize]),
-        dense_sample =args.dense_sample,uniform_sample=args.uniform_sample,random_sample = args.random_sample,
-        strided_sample = args.strided_sample),
-        batch_size=args.batch_size, shuffle=True,
-        num_workers=args.num_workers, pin_memory=True,
-        drop_last=True)  # prevent something not % n_GPU
-  
-    val_loader = torch.utils.data.DataLoader(
-        VIRAT_dataset(cfg.VIRAT.VAL_DATA,cfg.VIRAT.NUM_CLASS,cfg,cfg.VIRAT.FRAMELIST_VAL, 
-        num_segments=args.num_segments,input_size = cfg.VIRAT.INPUT_SIZE,
-        transform=torchvision.transforms.Compose([ToTorchFormatTensor(div=1),normalize]),
-        dense_sample =args.dense_sample,uniform_sample=args.uniform_sample,
-        random_sample = args.random_sample,strided_sample = args.strided_sample),
-        batch_size=args.batch_size, shuffle=False,
-        num_workers=args.num_workers, pin_memory=True) 
-
-    test_loader = torch.utils.data.DataLoader(
-        VIRAT_dataset(cfg.VIRAT.TEST_DATA,cfg.VIRAT.NUM_CLASS,cfg,cfg.VIRAT.FRAMELIST_TEST,
-        num_segments=args.num_segments,input_size = cfg.VIRAT.INPUT_SIZE,
-        transform=torchvision.transforms.Compose([ToTorchFormatTensor(div=1),normalize]),
-        dense_sample =args.dense_sample,uniform_sample=args.uniform_sample,random_sample = args.random_sample,
-        strided_sample = args.strided_sample),batch_size=args.batch_size, shuffle=False,
-        num_workers=args.num_workers, pin_memory=True)
-
-  elif args.dataset == 'ava':
-
-    num_class = cfg.AVA.NUM_CLASSES
-    
-    log_training = open(os.path.join(cfg.LOG.AVA_LOG_DIR, args.store_name, 'log.csv'), 'w')
-    with open(os.path.join(cfg.LOG.AVA_LOG_DIR, args.store_name, 'args.txt'), 'w') as f:
-        f.write(str(args))
-    logger = SummaryWriter(log_dir=os.path.join(cfg.LOG.AVA_LOG_DIR, args.store_name))
-
-
-    #initialise the dataloader
-    train_loader = torch.utils.data.DataLoader(Ava(cfg,split = "train",
-    num_segments=args.num_segments,dense_sample = args.dense_sample,
-    uniform_sample=args.uniform_sample,random_sample = args.random_sample,
-    strided_sample = args.strided_sample),batch_size=args.batch_size,
-    shuffle = False,num_workers=args.num_workers,pin_memory=True,
-    drop_last = True) #change shuffle to true
-    
-    val_loader = torch.utils.data.DataLoader(Ava(cfg,split = "val",
-    num_segments=args.num_segments,dense_sample = args.dense_sample,
-    uniform_sample=args.uniform_sample,random_sample = args.random_sample,
-    strided_sample = args.strided_sample),batch_size=args.batch_size,
-    shuffle = False,num_workers=args.num_workers,pin_memory=True,
-    drop_last = False)
-    
-    #initialise meters here
-    
-    ava_val_meter = AVAMeter(len(val_loader), cfg, mode="val",
+    test_loader = construct_loader(cfg,dataset = args.dataset,num_segments = args.num_segments,
+        batch_size = args.batch_size,split = 'test',input_sampling = True)
+      
+        
+  #initialise meter here for AVA
+  if args.dataset == 'ava':
+      ava_val_meter = AVAMeter(len(val_loader), cfg, mode="val",
                              num_seg =args.num_segments)
+  else : 
+    ava_val_meter = None
           
-  else: 
-    print("dataset is not defined")
-  
+      
   # prevent something not % n_GPU
   if args.cuda:
     cfg.CUDA = True
 
   # initilize the network here.
-  if args.net == 'res50':
+  if args.net == 'vgg16':
+    fasterRCNN = vgg16(num_class,pretrained=True,class_agnostic=args.class_agnostic,
+    loss_type = args.loss_type)
+  elif args.net == 'res50':
    fasterRCNN = resnet(num_class,num_layers =50, base_model ='resnet50', n_segments =args.num_segments,
                n_div =args.shift_div , place = args.shift_place,
                pretrain = args.pretrain,shift = args.shift,
@@ -306,9 +141,8 @@ def main():
 
   fasterRCNN.create_architecture()
   print("blocks fixed:%d"%(cfg.RESNET.FIXED_BLOCKS))
-  lr = args.lr
-  BASE_LEARNING_RATE = lr
   
+  lr = args.lr
   params = []
   for key, value in dict(fasterRCNN.named_parameters()).items():
     if value.requires_grad:
@@ -342,18 +176,60 @@ def main():
             if k not in model_dict:
                 replace_dict.append((k.replace('module.base_model.conv1',
                 'RCNN_base.0').replace('module.base_model.bn1','RCNN_base.1')
+                
+                #.replace('module.base_model.layer1.0.conv1.net','RCNN_base.4.0.conv1')
+                #.replace('module.base_model.layer1.0.conv2','RCNN_base.4.0.conv2.net')
                 .replace('module.base_model.layer1.0','RCNN_base.4.0')
+                
+                #.replace('module.base_model.layer1.1.conv1.net','RCNN_base.4.1.conv1')
+                #.replace('module.base_model.layer1.1.conv2','RCNN_base.4.1.conv2.net')
                 .replace('module.base_model.layer1.1','RCNN_base.4.1')
+                
+                #.replace('module.base_model.layer1.2.conv1.net','RCNN_base.4.2.conv1')
+                #.replace('module.base_model.layer1.2.conv2','RCNN_base.4.2.conv2.net')
                 .replace('module.base_model.layer1.2','RCNN_base.4.2')
+
+                
+                #.replace('module.base_model.layer2.0.conv1.net','RCNN_base.5.0.conv1')
+                #.replace('module.base_model.layer2.0.conv2','RCNN_base.5.0.conv2.net')
                 .replace('module.base_model.layer2.0','RCNN_base.5.0')
+
+                
+                #.replace('module.base_model.layer2.1.conv1.net','RCNN_base.5.1.conv1')
+                #.replace('module.base_model.layer2.1.conv2','RCNN_base.5.1.conv2.net')
                 .replace('module.base_model.layer2.1','RCNN_base.5.1')
+                   
+                #.replace('module.base_model.layer2.2.conv1.net','RCNN_base.5.2.conv1')
+                #.replace('module.base_model.layer2.2.conv2','RCNN_base.5.2.conv2.net') 
                 .replace('module.base_model.layer2.2','RCNN_base.5.2')
+
+                #.replace('module.base_model.layer2.3.conv1.net','RCNN_base.5.3.conv1')
+                #.replace('module.base_model.layer2.3.conv2','RCNN_base.5.3.conv2.net')
                 .replace('module.base_model.layer2.3','RCNN_base.5.3')
+
+                
+                #.replace('module.base_model.layer3.0.conv1.net','RCNN_base.6.0.conv1')
+                #.replace('module.base_model.layer3.0.conv2','RCNN_base.6.0.conv2.net')
                 .replace('module.base_model.layer3.0','RCNN_base.6.0')
+                
+                #.replace('module.base_model.layer3.1.conv1.net','RCNN_base.6.1.conv1')
+                #.replace('module.base_model.layer3.1.conv2','RCNN_base.6.1.conv2.net')
                 .replace('module.base_model.layer3.1','RCNN_base.6.1')
+                
+                #.replace('module.base_model.layer3.2.conv1.net','RCNN_base.6.2.conv1')
+                #.replace('module.base_model.layer3.2.conv2','RCNN_base.6.2.conv2.net')
                 .replace('module.base_model.layer3.2','RCNN_base.6.2')
+                
+                #.replace('module.base_model.layer3.3.conv1.net','RCNN_base.6.3.conv1')
+                #.replace('module.base_model.layer3.3.conv2','RCNN_base.6.3.conv2.net')
                 .replace('module.base_model.layer3.3','RCNN_base.6.3')
+                
+                #.replace('module.base_model.layer3.4.conv1.net','RCNN_base.6.4.conv1')
+                #.replace('module.base_model.layer3.4.conv2','RCNN_base.6.4.conv2.net')
                 .replace('module.base_model.layer3.4','RCNN_base.6.4')
+                
+                #.replace('module.base_model.layer3.5.conv1.net','RCNN_base.6.5.conv1')
+                #.replace('module.base_model.layer3.5.conv2','RCNN_base.6.5.conv2.net')
                 .replace('module.base_model.layer3.5','RCNN_base.6.5')
                 .replace('module.base_model.layer4.0.conv1.net.weight','RCNN_top.0.0.conv1.weight')
                 .replace('module.base_model.layer4.1.conv1.net','RCNN_top.0.1.conv1')
@@ -413,7 +289,7 @@ def main():
   if args.evaluate:
     validate(val_loader, fasterRCNN,args.start_epoch,num_class, \
              args.num_segments,vis,session,args.batch_size,input_data,\
-             cfg,log_training,ava_val_meter)
+             cfg,log_training,ava_val_meter,args.dataset)
     
   for epoch in range(args.start_epoch, args.max_epochs + 1):
     
@@ -440,33 +316,46 @@ def main():
     
     
     if args.dataset == 'virat':
+      #dataloader 
       train(train_loader, fasterRCNN,lr,optimizer,
         epoch,num_class,args.batch_size,session,mGPUs,logger,output_dir,
         input_data,cfg,args.acc_step,log_training)
       ava_val_meter = None
+      
       # evaluate on validation set
-      #if epoch % 3 == 0:
-      #meanap = 
       validate(val_loader, fasterRCNN,epoch,num_class, \
       args.num_segments,vis,session,args.batch_size,input_data,cfg,\
-      log_training,ava_val_meter)
-      #is_best = meanap > best_meanap
-      #best_meanap = max(best_meanap,meanap)
-      #print(f"best mean ap : [{best_meanap}]")
+      log_training,ava_val_meter,args.dataset)
+      
       if epoch % 10== 0:
       # test_ap = 
+        test_loader = construct_loader(cfg,dataset = args.dataset,num_segments = args.num_segments,
+        batch_size = args.batch_size,split = 'test',input_sampling = True)
+      
         validate(test_loader, fasterRCNN,epoch,num_class, \
               args.num_segments,vis,session,args.batch_size,input_data,cfg,
-              log_training,ava_val_meter)
+              log_training,ava_val_meter,args.dataset)
     
     elif args.dataset == 'ava':
+          
       train(train_loader, fasterRCNN,lr,optimizer,
           epoch,num_class,args.batch_size,session,mGPUs,logger,output_dir,
           input_data,cfg,args.acc_step,log_training)
+      
       if epoch % 2== 0:
         validate(val_loader, fasterRCNN,epoch,num_class, \
               args.num_segments,vis,session,args.batch_size,input_data,
-              cfg,log_training,ava_val_meter)
+              cfg,log_training,ava_val_meter,args.dataset)
+    
+    elif args.dataset == 'ucfsport':
+      
+      ava_val_meter = None
+      train(train_loader, fasterRCNN,lr,optimizer,
+            epoch,num_class,args.batch_size,session,mGPUs,logger,output_dir,
+            input_data,cfg,args.acc_step,log_training)
+      validate(val_loader, fasterRCNN,epoch,num_class, \
+              args.num_segments,vis,session,args.batch_size,input_data,
+              cfg,log_training,ava_val_meter,args.dataset)
  
 def train(train_loader,fasterRCNN,lr,optimizer,epoch,num_class,batch_size,session,mGPUs,
           logger,output_dir,input_data,cfg,acc_step,log):
@@ -497,7 +386,7 @@ def train(train_loader,fasterRCNN,lr,optimizer,epoch,num_class,batch_size,sessio
         num_boxes = num_boxes.view(-1)
         
         #fasterRCNN.zero_grad()
-        # compute output
+        # compute ouevatput
         rois, cls_prob, bbox_pred, \
         rpn_loss_cls, rpn_loss_box, \
         RCNN_loss_cls, RCNN_loss_bbox, \
@@ -574,16 +463,16 @@ def train(train_loader,fasterRCNN,lr,optimizer,epoch,num_class,batch_size,sessio
         
 @torch.no_grad()
 def validate(val_loader,fasterRCNN,epoch,num_class,num_segments,vis,session,
-             batch_size,input_data,cfg,log,ava_val_meter):
+             batch_size,input_data,cfg,log,ava_val_meter,dataset):
     
     batch_time = AverageMeter()
-    val_iters_per_epoch = int(len(val_loader))
+    val_iters_per_epoch = int(np.round(len(val_loader)))
     im_data,im_info,num_boxes,gt_boxes = input_data
     fasterRCNN.eval()
     all_boxes = [[[[]for _ in range(num_class)] for _ in range(batch_size *num_segments)]
                for _ in range(val_iters_per_epoch)]
     #limit the number of proposal per image across all the class
-    max_per_image = cfg.AVA.MAX_DET_IMG
+    max_per_image = cfg.MAX_DET_IMG
     bins = 9 
     score_threshold = 0.1
     tp_labels = np.zeros((num_class,bins),dtype=int)
@@ -609,8 +498,10 @@ def validate(val_loader,fasterRCNN,epoch,num_class,num_segments,vis,session,
           if isinstance(meta["metadata"], (list,)):
                 for i in range(len(meta["metadata"])):
                     meta["metadata"][i] = meta["metadata"][i].cpu().numpy()
+        start_time = time.time()
         rois, cls_prob, bbox_pred = fasterRCNN(im_data, im_info, gt_boxes, num_boxes)
-      
+        torch.cuda.synchronize()
+        end_time = time.time() - start_time
 
       # measure elapsed time
         batch_time.update(time.time() - end)
@@ -708,24 +599,10 @@ def validate(val_loader,fasterRCNN,epoch,num_class,num_segments,vis,session,
        ava_val_meter.reset()
     else : 
        ap = precision_recall(tp_labels,fp_labels,fn_labels,num_class)
-       for n in range(1,num_class):
-        for key, v in activity2id_hard.items(): #modfieed
-          if v == n :
-            print(f"Class '{n}' ({key}) - AveragePrecision: {ap[n-1]}")
-            ap_out = ('Class {0} ({1}) - AveragePrecision: {2}').format(n,key,ap[n-1])
-            log.write(ap_out + '\n')
-       output = (' completed step:{0}\n'
-              'tp_labels: {1}\n'
-              'fp_labels: {2} \n' 
-              'fn_labels: {3} \n'          
-                           .format(step,tp_labels,fp_labels,fn_labels)) 
-              
-       #print the mean average precision      
-       print(f"mAP for epoch [{epoch}]: {mean(ap)}")
-       mean_outap = ('mAP for epoch [{0}]: {1}'.format(epoch,mean(ap)))
-       log.write(output + '\n' + mean_outap + '\n')
-       log.flush()
-    #return np.mean(ap)
-
+       if dataset == 'virat':
+         dictio = activity2id
+       else:
+         dictio = act2id
+       print_ap(tp_labels,fp_labels,fn_labels,num_class,log,step,epoch,dictio,ap)
 if __name__ == '__main__':
    main()    

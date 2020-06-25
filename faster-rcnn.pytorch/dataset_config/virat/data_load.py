@@ -189,9 +189,9 @@ class VIRAT_dataset(data.Dataset):
                             bbox = (i[2:6])*im_scale
                             bbox_new[0:4] = bbox
                             #change to train only hard class
-                            bbox_new[4:] = i[6:7]
-                            bbox_new[5:] = i[10:10+self.num_class -1]
-                            #bbox_new[4:]=i[6:6+self.num_class]#change here to train only less hard class
+                            #bbox_new[4:] = i[6:7]
+                            #bbox_new[5:] = i[10:10+self.num_class -1]
+                            bbox_new[4:]=i[6:6+self.num_class]#change here to train only less hard class
                             bboxes[count,:]+=bbox_new
                             count+=1
                             
