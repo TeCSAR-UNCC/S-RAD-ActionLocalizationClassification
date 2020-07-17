@@ -66,8 +66,8 @@ __C.TRAIN.SCALES = (600,)
 __C.TRAIN.MAX_SIZE = 1000
 
 # Trim size for input images to create minibatch
-__C.TRAIN.TRIM_HEIGHT = 600
-__C.TRAIN.TRIM_WIDTH = 600
+__C.TRAIN.TRIM_HEIGHT = 300
+__C.TRAIN.TRIM_WIDTH = 400
 
 # Images to use per minibatch
 __C.TRAIN.IMS_PER_BATCH = 1
@@ -286,7 +286,8 @@ __C.POOLING_MODE = 'align'
 __C.POOLING_SIZE = 7
 
 # Maximal number of gt rois in an image during Training
-__C.MAX_NUM_GT_BOXES = 15
+#change this if virat is used
+__C.MAX_NUM_GT_BOXES = 2
 
 # Anchor scales for RPN
 __C.ANCHOR_SCALES = [8,16,32]
@@ -299,9 +300,11 @@ __C.FEAT_STRIDE = [16, ]
 
 __C.CUDA = False
 
-__C.MAX_DET_IMG = 15
+#change this if virat is used
+__C.MAX_DET_IMG = 100
 
-# Sampling techniques
+# Sampling techniquesfworker
+#change this if virat is used
 __C.DENSE_SAMPLE = False
 __C.UNIFORM_SAMPLE = True
 __C.STRIDED_SAMPLE = False
@@ -310,6 +313,9 @@ __C.RANDOM_SAMPLE = False
 # Number of worker
 
 __C.NUM_WORKERS = 0
+
+
+
 
 __C.CROP_RESIZE_WITH_MAX_POOL = True
 
@@ -321,7 +327,8 @@ __C.LOG = edict()
 __C.LOG.VIRAT_LOG_DIR = "/mnt/AI_RAID/VIRAT/logs"
 __C.LOG.AVA_LOG_DIR = "/mnt/AI_RAID/ava/logs"
 __C.LOG.UCFSPORT_LOG_DIR = "/mnt/AI_RAID/UCF-Sports-Actions/logs"
-
+__C.LOG.JHMDB_LOG_DIR = "/mnt/AI_RAID/jhmdb/logs"
+__C.LOG.UCF24_LOG_DIR = "/mnt/AI_RAID/UCF101_24C/logs"
 # -----------------------------------------------------------------------------
 # Focal  loss options
 # -----------------------------------------------------------------------------
@@ -345,7 +352,7 @@ __C.VIRAT.TEST_DATA = "/mnt/AI_RAID/actev-data-repo/dataset/test/"
 
 # num of class
 
-__C.VIRAT.NUM_CLASS = 11
+__C.VIRAT.NUM_CLASS = 30
 
 # Directory to the frame list 
 
@@ -358,6 +365,8 @@ __C.VIRAT.FRAMELIST_TEST = "/mnt/AI_RAID/VIRAT/actev-data-repo/frame_list/test_l
 __C.VIRAT.INPUT_SIZE = 600
 __C.VIRAT.INPUT_MEAN = [0.485, 0.456, 0.406]
 __C.VIRAT.INPUT_STD  = [0.229, 0.224, 0.225]
+
+__C.VIRAT.SCORE_THRES = 0
 
 #
 
@@ -391,6 +400,70 @@ __C.UCFSPORT.FRAME_DIR = "/mnt/AI_RAID/UCF-Sports-Actions/Frames"
 
 __C.UCFSPORT.INPUT_MEAN = [0.485, 0.456, 0.406]
 __C.UCFSPORT.INPUT_STD  = [0.229, 0.224, 0.225]
+
+
+# -----------------------------------------------------------------------------
+# JHMDB Dataset options
+# -----------------------------------------------------------------------------
+# Directory path of frames.
+__C.JHMDB =edict()
+
+# Output model directory
+__C.JHMDB.output_model_dir = "/mnt/AI_RAID/jhmdb/models"
+
+# num of classes 
+__C.JHMDB.NUM_CLASSES = 22
+
+# split 1 imageset name 
+#__C.JHMDB.splits = "JHMDB_RGB_1_split_0"
+
+# Directory path for files of frame lists.
+__C.JHMDB.FRAME_LIST_DIR = (
+    "/mnt/AI_RAID/jhmdb/splits/"
+)
+
+# Directory path for annotation files.
+__C.JHMDB.ANNOTATION_DIR = (
+    "/mnt/AI_RAID/jhmdb/puppet_mask"
+)
+# Directory path of frames.
+__C.JHMDB.FRAME_DIR = "/mnt/AI_RAID/jhmdb/frames"
+
+__C.JHMDB.INPUT_MEAN = [0.485, 0.456, 0.406]
+__C.JHMDB.INPUT_STD  = [0.229, 0.224, 0.225]
+
+
+# -----------------------------------------------------------------------------
+# UCF24 Dataset options
+# -----------------------------------------------------------------------------
+# Directory path of frames.
+__C.UCF24 =edict()
+
+# Output model directory
+__C.UCF24.output_model_dir = "/mnt/AI_RAID/UCF101_24C/models"
+
+# num of classes 
+__C.UCF24.NUM_CLASSES = 25
+
+# split 1 imageset name 
+#__C.JHMDB.splits = "JHMDB_RGB_1_split_0"
+
+# Directory path for files of frame lists.
+__C.UCF24.FRAME_LIST_DIR = (
+    "/mnt/AI_RAID/UCF101_24C/splitfiles/"
+)
+
+# Directory path for annotation files.
+__C.UCF24.ANNOTATION_DIR = (
+    "/mnt/AI_RAID/UCF101_24C/annotation/finalAnnots.mat"
+)
+# Directory path of frames.
+__C.UCF24.FRAME_DIR = "/mnt/AI_RAID/UCF101_24C/frames"
+
+__C.UCF24.INPUT_MEAN = [0.485, 0.456, 0.406]
+__C.UCF24.INPUT_STD  = [0.229, 0.224, 0.225]
+
+
 
 # -----------------------------------------------------------------------------
 # AVA Dataset options

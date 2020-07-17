@@ -11,6 +11,8 @@ import pdb
 import random
 from tensorboardX import SummaryWriter
 from statistics import mean 
+import operator
+from operator import itemgetter
 
 from model.rpn.bbox_transform import cpu_bbox_overlaps
 
@@ -146,6 +148,162 @@ def adjust_learning_rate(optimizer, decay=0.1):
     for param_group in optimizer.param_groups:
         param_group['lr'] = decay * param_group['lr']
 
+def match_dt_gt(e, imgid, target_dt_boxes, gt_boxes, eval_target):
+  for target_class,id in eval_target.items():
+    #if len(gt_boxes[target_class]) == 0:
+    #  continue
+    # target_dt_boxes[id].sort(key=operator.itemgetter(1), reverse=True)
+    if len(target_dt_boxes[id])>0:
+      d = target_dt_boxes[id][:,0:4]
+      dscores=target_dt_boxes[id][:,4:5]
+    else:
+      d=np.zeros((0,4))
+      dscores=np.zeros((0,1))
+    #d = [box for box, prob in target_dt_boxes[id]]
+    #dscores = [prob for box, prob in target_dt_boxes[target_class]]
+    if (gt_boxes[id]):
+      g=np.vstack(gt_boxes[id])
+    else:
+      g = np.zeros((0,4))
+    # len(D), len(G)
+    iou = cpu_bbox_overlaps(d,g)
+
+    dm, gm = match_detection(d, g, iou,iou_thres=0.5)
+    
+    e[target_class][imgid] = {
+        "dscores": dscores,
+        "dm": dm,
+        "gt_num": len(g)}
+
+def aggregate_eval(e, maxDet=100):
+  aps = {}
+  ars = {}
+  for catId in e:
+    e_c = e[catId]
+    # put all detection scores from all image together
+    dscores = np.concatenate([e_c[imageid]["dscores"][:maxDet]
+                              for imageid in e_c])
+    dscores = dscores.reshape(-1)                         
+    # sort
+    inds = np.argsort(-dscores, kind="mergesort")
+    # dscores_sorted = dscores[inds]
+
+    # put all detection annotation together based on the score sorting
+    dm = np.concatenate([e_c[imageid]["dm"][:maxDet] for imageid in e_c])[inds]
+    num_gt = np.sum([e_c[imageid]["gt_num"] for imageid in e_c])
+    
+    print("gt: class['{0}'] is :'{1}'\t".format(catId,num_gt))
+    print("detections: class['{0}'] is :'{1}'".format(catId,(dscores.shape[0])))
+    # here the average precision should also put the unmatched ground truth
+    aps[catId] = computeAP_v2(dm, num_gt)
+    #ars[catId] = computeAR_2(dm, num_gt)
+
+  return aps
+
+
+def computeAP_v2(lists, total_gt):
+
+  rels = 0
+  rank = 0
+  
+  score = 0.0
+  for one in lists:
+    rank += 1
+    if one >= 0:
+      rels += 1
+      score += rels / float(rank)
+  if total_gt != 0:
+    score /= float(total_gt)
+  return score
+
+def match_detection(d, g, ious, iou_thres=0.5):
+  D = len(d)
+  G = len(g)
+  # < 0 to note it is not matched, once matched will be the index of the d
+  gtm = -np.ones((G)) # whether a gt box is matched
+  dtm = -np.ones((D))
+
+  # for each detection bounding box (ranked), will get the best IoU
+  # matched ground truth box
+  for didx, _ in enumerate(d):
+    iou = iou_thres # the matched iou
+    m = -1 # used to remember the matched gidx
+    for gidx, _ in enumerate(g):
+      # if this gt box is matched
+      if gtm[gidx] >= 0:
+        continue
+
+      # the di,gi pair doesn"t have the required iou
+      # or not better than before
+      if ious[didx, gidx] < iou:
+        continue
+
+      # got one
+      iou = ious[didx, gidx]
+      m = gidx
+
+    if m == -1:
+      continue
+    gtm[m] = didx
+    dtm[didx] = m
+  return dtm, gtm
+
+
+
+def tpfp_default(det_bboxes, gt_bboxes, iou_thr):
+    """Check if detected bboxes are true positive or false positive.
+
+    Args:
+        det_bbox (ndarray): the detected bbox
+        gt_bboxes (ndarray): ground truth bboxes of this image
+        gt_ignore (ndarray): indicate if gts are ignored for evaluation or not
+        iou_thr (float): the iou thresholds
+
+    Returns:
+        tuple: (tp, fp), two arrays whose elements are 0 and 1
+    """
+    if len(det_bboxes)>0:
+      num_dets = det_bboxes.shape[0]
+    else:
+      det_bboxes = np.asarray(det_bboxes,dtype=np.float)
+      num_dets = det_bboxes.shape[0]
+    gt_bboxes = np.asarray(gt_bboxes,dtype=np.float)
+    num_gts = gt_bboxes.shape[0]
+    area_ranges = [(None, None)]
+    #num_scales
+    # tp and fp are of shape (num_scales, num_gts), each row is tp or fp of
+    # a certain scale
+    tp = np.zeros((1,num_dets), dtype=np.float32)
+    fp = np.zeros((1,num_dets), dtype=np.float32)
+    # if there is no gt bboxes in this image, then all det bboxes
+    # within area range are false positives
+    if gt_bboxes.shape[0] == 0:
+        if area_ranges == [(None, None)]:
+            fp[...] = 1
+        return tp, fp
+    if det_bboxes.shape[0] == 0:
+      return tp,fp
+        
+    ious = cpu_bbox_overlaps(det_bboxes[:,:4], gt_bboxes)
+    ious_max = ious.max(axis=1)
+    ious_argmax = ious.argmax(axis=1)
+    sort_inds = np.argsort(-det_bboxes[:, -1])
+    gt_covered = np.zeros(num_gts, dtype=bool)
+    for i in sort_inds:
+            if ious_max[i] >= iou_thr:
+                matched_gt = ious_argmax[i]
+                if not gt_covered[matched_gt]:
+                        gt_covered[matched_gt] = True
+                        tp[0, i] = 1
+                else:
+                        fp[0, i] = 1
+                # otherwise ignore this detected bbox, tp = 0, fp = 0
+            else:
+                fp[0, i] = 1
+            
+    return tp, fp
+
+
 def compute_tp_fp(all_boxes,gtlabels,gtbb,num_class,tp_labels,fp_labels,fn_labels,bins):
     bin_dict = {
                   0: lambda x: 1 if x>= 0.1 else 0,
@@ -267,6 +425,10 @@ def check_rootfolders(store_name,dataset):
       cfg.LOG.ROOT_LOG_DIR = cfg.LOG.AVA_LOG_DIR
     elif dataset == 'ucfsport':
       cfg.LOG.ROOT_LOG_DIR = cfg.LOG.UCFSPORT_LOG_DIR
+    elif dataset == 'jhmdb':
+      cfg.LOG.ROOT_LOG_DIR = cfg.LOG.JHMDB_LOG_DIR
+    elif dataset == 'ucf24':
+      cfg.LOG.ROOT_LOG_DIR = cfg.LOG.UCF24_LOG_DIR
     folders_util = [cfg.LOG.ROOT_LOG_DIR, os.path.join(cfg.LOG.ROOT_LOG_DIR, store_name)]
     for folder in folders_util:
         if not os.path.exists(folder):
@@ -340,6 +502,53 @@ def compute_ap(recall, precision):
         (recall[indices] - recall[indices - 1]) * precision[indices]
     )
     return average_precision
+
+def average_precision(recalls, precisions, mode='area'):
+    """Calculate average precision (for single or multiple scales).
+
+    Args:
+        recalls (ndarray): shape (num_scales, num_dets) or (num_dets, )
+        precisions (ndarray): shape (num_scales, num_dets) or (num_dets, )
+        mode (str): 'area' or '11points', 'area' means calculating the area
+            under precision-recall curve, '11points' means calculating
+            the average precision of recalls at [0, 0.1, ..., 1]
+
+    Returns:
+        float or ndarray: calculated average precision
+    """
+    no_scale = False
+    if recalls.ndim == 1:
+        no_scale = True
+        recalls = recalls[np.newaxis, :]
+        precisions = precisions[np.newaxis, :]
+    assert recalls.shape == precisions.shape and recalls.ndim == 2
+    num_scales = recalls.shape[0]
+    ap = np.zeros(num_scales, dtype=np.float32)
+    if mode == 'area':
+        zeros = np.zeros((num_scales, 1), dtype=recalls.dtype)
+        ones = np.ones((num_scales, 1), dtype=recalls.dtype)
+        mrec = np.hstack((zeros, recalls, ones))
+        mpre = np.hstack((zeros, precisions, zeros))
+        for i in range(mpre.shape[1] - 1, 0, -1):
+            mpre[:, i - 1] = np.maximum(mpre[:, i - 1], mpre[:, i])
+        for i in range(num_scales):
+            ind = np.where(mrec[i, 1:] != mrec[i, :-1])[0]
+            ap[i] = np.sum(
+                (mrec[i, ind + 1] - mrec[i, ind]) * mpre[i, ind + 1])
+    elif mode == '11points':
+        for i in range(num_scales):
+            for thr in np.arange(0, 1 + 1e-3, 0.1):
+                precs = precisions[i, recalls[i, :] >= thr]
+                prec = precs.max() if precs.size > 0 else 0
+                ap[i] += prec
+            ap /= 11
+    else:
+        raise ValueError(
+            'Unrecognized mode, only "area" and "11points" are supported')
+    if no_scale:
+        ap = ap[0]
+    return ap
+
 
 def save_checkpoint(state, filename):
     torch.save(state, filename)
@@ -486,7 +695,19 @@ def log_info(cfg,store_name = None,dataset = None,args = None) :
     with open(os.path.join(cfg.LOG.UCFSPORT_LOG_DIR, store_name, 'args.txt'), 'w') as f:
         f.write(str(args))
     logger = SummaryWriter(log_dir=os.path.join(cfg.LOG.UCFSPORT_LOG_DIR, store_name))
+  elif dataset == 'jhmdb':
+    log_training = open(os.path.join(cfg.LOG.JHMDB_LOG_DIR, store_name, 'log.csv'), 'w')
+    with open(os.path.join(cfg.LOG.JHMDB_LOG_DIR, store_name, 'args.txt'), 'w') as f:
+        f.write(str(args))
+    logger = SummaryWriter(log_dir=os.path.join(cfg.LOG.JHMDB_LOG_DIR, store_name))
+  elif dataset == 'ucf24':
+    log_training = open(os.path.join(cfg.LOG.UCF24_LOG_DIR, store_name, 'log.csv'), 'w')
+    with open(os.path.join(cfg.LOG.UCF24_LOG_DIR, store_name, 'args.txt'), 'w') as f:
+        f.write(str(args))
+    logger = SummaryWriter(log_dir=os.path.join(cfg.LOG.UCF24_LOG_DIR, store_name))
+  
   return log_training,logger
+
 
 
 def print_ap(tp_labels,fp_labels,fn_labels,num_class,log,step,epoch,dictio,ap):

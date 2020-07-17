@@ -59,6 +59,7 @@ def parse_args():
   parser.add_argument('--loss_type',type=str,default='sigmoid',help="""\
       Loss type for training the network ('softmax', 'sigmoid', 'focal').\
       """)
+  parser.add_argument('--splits', type=str,default="JHMDB_RGB_1_split_0")
 
   # config optimization
   parser.add_argument('--o', dest='optimizer',
