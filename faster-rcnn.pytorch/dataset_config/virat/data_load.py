@@ -54,7 +54,28 @@ activity2id_hard = {
     "Push": 25,
     "PickUp_Person_Vehicle": 26
     }
-    
+
+activity2id_argus = {
+    "BG": 0,  # background
+    "activity_carrying": 3,
+    "Closing": 5,
+    "Opening": 6,
+    "Exiting": 8,
+    "Entering": 9,
+    "Talking": 10,
+    "Transport_HeavyCarry": 11,
+    "Unloading": 12,
+    "Pull": 13,
+    "Loading": 14,
+    "Open_Trunk": 15,
+    "Closing_Trunk": 16,
+    "Riding": 17,
+    "specialized_texting_phone": 18,
+    "specialized_talking_phone": 20,
+    "vehicle_turning_right": 30,
+    "vehicle_turning_left": 34,
+    "vehicle_u_turn": 35
+    }
 
 activity2id = {
     "BG": 0,  # background
@@ -98,7 +119,38 @@ activity2id = {
     "Misc" : 38,
     "Drop" : 39}
 
-
+activity2id_person ={
+    #"BG": 0,  # background
+    "activity_walking": 1,
+    "activity_standing": 2,
+    "activity_carrying": 3,
+    "activity_gesturing": 4,
+    "Closing": 5,
+    "Opening": 6,
+    "Interacts": 7,
+    "Exiting": 8,
+    "Entering": 9,
+    "Talking": 10,
+    "Transport_HeavyCarry": 11,
+    "Unloading": 12,
+    "Pull": 13,
+    "Loading": 14,
+    "Open_Trunk": 15,
+    "Closing_Trunk": 16,
+    "Riding": 17,
+    "specialized_texting_phone": 18,
+    "Person_Person_Interaction": 19,
+    "specialized_talking_phone": 20,
+    "activity_running": 21,
+    "PickUp": 22,
+    "specialized_using_tool": 23,
+    "SetDown": 24,
+    "activity_crouching": 25,
+    "activity_sitting": 26,
+    "Object_Transfer": 27,
+    "Push": 28,
+    "PickUp_Person_Vehicle": 29,
+}
 class VIRAT_dataset(data.Dataset):
     def __init__(self, train_path,num_class,cfg,list_file,
                  num_segments=3,input_size = 600,transform=None,dense_sample=False,
@@ -171,6 +223,7 @@ class VIRAT_dataset(data.Dataset):
                     
                     bboxes = np.zeros((self.cfg.MAX_NUM_GT_BOXES,(self.num_class + 4)),dtype= float)
                     p = int(seg_ind) + int(frame)
+                    #get image details-read the image/transpose/rescale
                     image_path = os.path.join(record.path, '{:06d}.jpg'.format(p))
                     im = imread(image_path)
                     im = im[:,:,::-1]
@@ -178,15 +231,23 @@ class VIRAT_dataset(data.Dataset):
                     height,width,_= im.shape #h=1080,w=1920
                     im_size_min= min(height,width)
                     im_size_max = max(height,width)
-                    im_scale = float(self.new_size) / float(im_size_min)
-                    im = cv2.resize(im, None, None, fx=im_scale, fy=im_scale,
-                    interpolation=cv2.INTER_LINEAR)
-                    im_info[j,:]=self.new_size,len(im[2]),im_scale
+                    im_scale = height / width
+                    #float(self.new_size) / float(im_size_min)
+                    if (height != 1080 and width != 1920):
+                       im = cv2.resize(im, (1920,1080), fx=im_scale, fy=im_scale,
+                       interpolation=cv2.INTER_LINEAR)
+                    im_info[j,:]=im.shape[0],im.shape[1],im_scale
+                    #self.new_size,len(im[2]),im_scale
                     img_path.append(image_path)
+                    #get the gt boxes from numpy file 
                     for i in data:
                         if i[0] == p:
                             bbox_new =[]
-                            bbox = (i[2:6])*im_scale
+                            if (height != 1080 and width != 1920):
+                                new_imscale = im.shape[0]/height
+                                bbox = i[2:6]*new_imscale
+                            else:
+                                bbox = i[2:6]
                             bbox_new[0:4] = bbox
                             #change to train only hard class
                             #bbox_new[4:] = i[6:7]
