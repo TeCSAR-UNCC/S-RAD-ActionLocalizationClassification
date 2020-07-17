@@ -7,6 +7,8 @@ from torch.utils.data._utils.collate import default_collate
 from dataset_config.virat.transforms import *
 from dataset_config.virat.data_load import *
 from dataset_config.UCF_Sports.ucfsports import *
+from dataset_config.JHMDB.JHMDB import *
+from dataset_config.UCF101.UCF101 import *
 from dataset_config.ava.ava_dataset import *
 from dataset_config.ava.meters import *
 
@@ -35,7 +37,7 @@ def detection_collate(batch):
     return blob, gt, num_boxes, im_info
 
 def construct_loader(cfg,dataset = None,num_segments = 8,batch_size = 3,
-                     split = None,input_sampling = True):
+                     split = None,input_sampling = True, split_num = None):
     
     if dataset == 'virat':
         num_class = cfg.VIRAT.NUM_CLASS
@@ -43,7 +45,7 @@ def construct_loader(cfg,dataset = None,num_segments = 8,batch_size = 3,
         if split == 'train':
            data_path = cfg.VIRAT.TRAIN_DATA
            listfile_path = cfg.VIRAT.FRAMELIST_TRAIN
-           shuffle = False
+           shuffle = True
            drop_last = True
         if split == 'val':
            data_path = cfg.VIRAT.VAL_DATA
@@ -90,13 +92,55 @@ def construct_loader(cfg,dataset = None,num_segments = 8,batch_size = 3,
         image_set = 'UCF-Sports_RGB_1_split_0'
         normalize = GroupNormalize(cfg.UCFSPORT.INPUT_MEAN, cfg.UCFSPORT.INPUT_STD)
         if split == 'train':
-            shuffle = False      #modify to true after debug
+            shuffle = True      #modify to true after debug
             drop_last = True
         if split == 'val':
             shuffle = False
             drop_last = False
         
         data_loader = torch.utils.data.DataLoader(ucfsports(cfg,image_set,
+            PHASE = split,num_segments=num_segments,dense_sample = cfg.DENSE_SAMPLE,
+            uniform_sample=cfg.UNIFORM_SAMPLE,random_sample = cfg.RANDOM_SAMPLE,
+            strided_sample = cfg.STRIDED_SAMPLE,is_input_sampling = input_sampling,
+            transform=torchvision.transforms.Compose([ToTorchFormatTensor(div=1),normalize])),
+            batch_size=batch_size,shuffle = shuffle,num_workers=cfg.NUM_WORKERS,pin_memory=True,
+            drop_last = drop_last,collate_fn=detection_collate)  #change shuffle to true after debuging
+        return data_loader
+
+    elif dataset == 'jhmdb':
+
+        num_class = cfg.JHMDB.NUM_CLASSES
+        image_set = split_num
+        normalize = GroupNormalize(cfg.JHMDB.INPUT_MEAN, cfg.JHMDB.INPUT_STD)
+        if split == 'train':
+            shuffle = True      #modify to true after debug
+            drop_last = True
+        if split == 'val':
+            shuffle = False
+            drop_last = False
+        
+        data_loader = torch.utils.data.DataLoader(JHMDB(cfg,image_set,
+            PHASE = split,num_segments=num_segments,dense_sample = cfg.DENSE_SAMPLE,
+            uniform_sample=cfg.UNIFORM_SAMPLE,random_sample = cfg.RANDOM_SAMPLE,
+            strided_sample = cfg.STRIDED_SAMPLE,is_input_sampling = input_sampling,
+            transform=torchvision.transforms.Compose([ToTorchFormatTensor(div=1),normalize])),
+            batch_size=batch_size,shuffle = shuffle,num_workers=cfg.NUM_WORKERS,pin_memory=True,
+            drop_last = drop_last,collate_fn=detection_collate)  #change shuffle to true after debuging
+        return data_loader
+
+    elif dataset == 'ucf24':
+
+        num_class = cfg.UCF24.NUM_CLASSES
+        #image_set = split_num
+        normalize = GroupNormalize(cfg.UCF24.INPUT_MEAN, cfg.UCF24.INPUT_STD)
+        if split == 'train':
+            shuffle = False      #modify to true after debug
+            drop_last = True
+        if split == 'val':
+            shuffle = False
+            drop_last = False
+        
+        data_loader = torch.utils.data.DataLoader(UCF101(cfg,
             PHASE = split,num_segments=num_segments,dense_sample = cfg.DENSE_SAMPLE,
             uniform_sample=cfg.UNIFORM_SAMPLE,random_sample = cfg.RANDOM_SAMPLE,
             strided_sample = cfg.STRIDED_SAMPLE,is_input_sampling = input_sampling,

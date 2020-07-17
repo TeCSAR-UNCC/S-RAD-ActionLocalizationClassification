@@ -137,15 +137,25 @@ class ucfsports(Dataset):
             im = im[:,:,::-1].astype(np.float32, copy=False) #RGB
             height,width,_= im.shape 
             im_size_min= min(height,width)
-            im_scale = float(self.cfg.TRAIN.TRIM_HEIGHT) / float(im_size_min)
-            im = cv2.resize(im, None, None, fx=im_scale, fy=im_scale,
+            im_size_max=max(height,width)
+            #im_scale1 = float(self.cfg.TRAIN.TRIM_HEIGHT) / float(im_size_min)
+            #im_scale2 = float(self.cfg.TRAIN.TRIM_WIDTH) / float(im_size_max)
+            im_scale = float(self.cfg.TRAIN.TRIM_HEIGHT) / float(self.cfg.TRAIN.TRIM_WIDTH)
+            im = cv2.resize(im, (400,300), fx=im_scale, fy=im_scale,
                     interpolation=cv2.INTER_LINEAR)
+            im_scale1 = float(self.cfg.TRAIN.TRIM_HEIGHT) / height
+            im_scale2 = float(self.cfg.TRAIN.TRIM_WIDTH) / width
+            
+            #im = cv2.resize(im, None, None, fx=im_scale1, fy=im_scale2,
+            #        interpolation=cv2.INTER_LINEAR)
             im_info[count,:]=self.cfg.TRAIN.TRIM_HEIGHT,len(im[2]),im_scale
             if len(Lines[0].split()) == 5:
             # gt boxes and labels per image
                x,y,w,h = [line.strip().split()[1:] for line in Lines if int((str(line).split())[0]) == seg_ind][0]
                x2 = int(x)+ int(w)
                y2 = int(y) + int(h)
+               y,y2 = int(y)*im_scale1,y2*im_scale1
+               x,x2 = int(x)*im_scale2,x2*im_scale2
                gt[count,0,:4] = int(x),int(y),x2,y2
                gt[count,0,4:] = one_hot_labels
             else : 
@@ -153,11 +163,11 @@ class ucfsports(Dataset):
                xf,yf,wf,hf = [int(tup) for tup in data1]
                data2 =[(line.split())[5:] for line in Lines if int((str(line).split())[0]) == seg_ind][0]
                xs,ys,ws,hs = [int(tup) for tup in data2]
-               gt[count,0,:4]= xf,yf,wf+xf,yf+hf
-               gt[count,1,:4]= xs,ys,ws+xs,ys+hs
+               gt[count,0,:4]= xf*im_scale2,yf*im_scale1,(wf+xf)*im_scale2,(yf+hf)*im_scale1
+               gt[count,1,:4]= xs*im_scale2,ys*im_scale1,(ws+xs)*im_scale2,(ys+hs)*im_scale1
                num_boxes[count] *= 2
                gt[count,:,4:] = one_hot_labels
-            gt[count,:,:4] = gt[count,:,:4]*im_scale
+            #gt[count,:,:4] = gt[count,:,:4]*im_scale
             count += 1
             images.append(im)
         
