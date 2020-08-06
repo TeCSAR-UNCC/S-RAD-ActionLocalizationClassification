@@ -118,11 +118,19 @@ class JHMDB(Dataset):
             offsets = [(idx * t_stride + start_idx) % record.num_frames for idx in range(self.num_segments)]
             return np.array(offsets)+1
         elif self.uniform_sample:  # normal sample
-            average_duration = (record.num_frames) // self.num_segments
-            if average_duration > 0:
-                offsets = np.multiply(list(range(self.num_segments)), average_duration) + randint(average_duration,
+            if record.num_frames <= self.num_segments:
+                offsets = list(range(record.num_frames))
+                offsets =[i+1 for i in offsets]
+                diff = self.num_segments - record.num_frames
+                add_offset = ([1] * diff)
+                add_offset = [off * record.num_frames for off in add_offset]
+                return np.array(offsets + add_offset)
+            else:
+                average_duration = (record.num_frames) // self.num_segments
+                if average_duration > 0:
+                    offsets = np.multiply(list(range(self.num_segments)), average_duration) + randint(average_duration,
                                        size=self.num_segments)
-            return offsets+1 
+                return offsets+1 
         elif self.random_sample:
             offsets = np.sort(randint(record.num_frames + 1, size=self.num_segments))
             return offsets+1 
@@ -135,7 +143,84 @@ class JHMDB(Dataset):
             offsets = np.zeros((self.num_segments,))    
             return offsets+1  
     
+    def get_all_frames(self ,index, record):
+        '''
+        function to consider all the frames with the index as the 
+        key frame and 7 frames before it
+        if the key frame is the first frame it takes the last 7 
+        frames from the end of the videos just like a circular buffer 
+        '''
+        #initialise the gt,num_boxes,im_info and one hot labels
+        gt = np.zeros((self.num_segments,self.cfg.MAX_NUM_GT_BOXES,(self.num_classes + 4)),
+                  dtype=np.float32)
+        num_boxes = np.ones((self.num_segments),dtype=np.float32)
+        im_info = np.zeros((self.num_segments,3),dtype=np.float32)
+        one_hot_labels = np.zeros((self.num_classes),dtype = np.float)
+        count = 0  #to traverse between the segments
 
+        #get the imageindex and labels from the framelist 
+        im_split = (record.path).split('/')
+        num_parts = len(im_split)
+        im_ind = int(im_split[num_parts-1][0:5])
+
+        #get the class label and convert to one hot
+        class_label_id = jhmdbact2id[im_split[0]]
+        one_hot_labels[class_label_id] = 1
+        
+        #annotation file and image folder to get the clips
+        ann_file =self._annot_path + '/' +im_split[0]+'/' +im_split[1] +'/'+'puppet_mask.mat' 
+        img_folder = os.path.join(self._data_path, im_split[0], im_split[1])
+        max_num = len(os.listdir(img_folder)) - 1
+        
+        clip = []
+
+        d = 1 
+        path = []
+        for i in reversed(range(self.num_segments)):
+        # make it as a loop
+           i_temp = im_ind - i * d
+           while i_temp < 1:
+            i_temp = max_num + i_temp
+           while i_temp > max_num:
+            i_temp = i_temp - max_num
+           path.append(i_temp)
+           
+           #prepare the image/frame
+           path_tmp = self._data_path +'/'+ im_split[0]+'/'+ im_split[1] +'/'+ ('{:05d}.png'.format(i_temp))
+           #print("image split0:{0} imagesplit1: {1} frameindex: {2}\n".format(im_split[0], im_split[1] ,'{:05d}.png'.format(i_temp)))
+           print("maximum_frames : {}".format(max_num))
+           print(path_tmp)
+           im = imread(path_tmp)
+           if im is None:
+               print("caught")
+           im = im[:,:,::-1].astype(np.float32, copy=False) #RGB
+           height,width,_= im.shape 
+           im_scale = float(self.cfg.TRAIN.TRIM_HEIGHT) / float(self.cfg.TRAIN.TRIM_WIDTH)
+           im = cv2.resize(im, (400,300), fx=im_scale, fy=im_scale,
+                    interpolation=cv2.INTER_LINEAR)
+           im_scale1 = float(self.cfg.TRAIN.TRIM_HEIGHT) / height
+           im_scale2 = float(self.cfg.TRAIN.TRIM_WIDTH) / width
+           im_info[count,:]=im.shape[0],im.shape[1],im_scale
+           
+           #prepare the gt boxes 
+           gt[count,0,:4] = self.get_annot_image_boxes(ann_file, i_temp)
+           x1,y1,x2,y2 = gt[count,0,:4]
+           y1,y2 = y1*im_scale1,y2*im_scale1
+           x1,x2 = x1*im_scale2,x2*im_scale2
+           gt[count,0,:4] = x1,y1,x2,y2
+           gt[count,0,4:] = one_hot_labels
+           count += 1
+           clip.append(im)
+
+        max_shape = np.array([imz.shape for imz in clip]).max(axis=0)
+        blob = np.zeros((len(clip), max_shape[0], max_shape[1], 3),
+                    dtype=np.float32)
+        for i in range(len(clip)):
+           blob[i,0:clip[i].shape[0], 0:clip[i].shape[1], :] = clip[i]
+
+        process_data = self.transform(blob)
+        return process_data,gt,num_boxes,im_info
+   
     
     def get(self,index,record, indices):
         """
@@ -194,9 +279,10 @@ class JHMDB(Dataset):
     
     def __getitem__(self, index):
         record = self.video_list[index]
-        segment_indices = self._sample_indices(record)
-        segment_indices = np.sort(segment_indices)
-        return self.get( index, record, segment_indices)
+        #segment_indices = self._sample_indices(record)
+        #segment_indices = np.sort(segment_indices)
+        return self.get_all_frames(index, record)
+        #return self.get( index, record, segment_indices)
                
     def __len__(self):
         return (len(self.video_list))

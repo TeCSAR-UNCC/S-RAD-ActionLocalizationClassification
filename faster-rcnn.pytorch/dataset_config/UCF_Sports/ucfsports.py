@@ -39,7 +39,7 @@ class VideoRecord(object):
     
     @property
     def labels(self):
-        return self._data[2]
+        return self._data[1]
 
 class ucfsports(Dataset):
     def __init__(self,cfg, image_set, PHASE = 'train',num_segments = 8,dense_sample = False,
@@ -107,6 +107,95 @@ class ucfsports(Dataset):
         else:
             offsets = np.zeros((self.num_segments,))    
             return offsets+1  
+    
+    def get_all_frames(self,index,record):
+        #initialise the gt,num_boxes,im_info and one hot labels
+        gt = np.zeros((self.num_segments,self.cfg.MAX_NUM_GT_BOXES,(self.num_classes + 4)),
+                  dtype=np.float32)
+        num_boxes = np.ones((self.num_segments),dtype=np.float32)
+        im_info = np.zeros((self.num_segments,3),dtype=np.float32)
+        one_hot_labels = np.zeros((self.num_classes),dtype = np.float)
+        count = 0  #to traverse between the segments
+
+        #get the imageindex and labels from the framelist 
+        im_split = (record.path).split('/')
+        num_parts = len(im_split)
+        im_ind = int(im_split[num_parts-1][0:6])
+
+        #get the class label and convert to one hot
+        class_label_id = act2id[record.labels]
+        one_hot_labels[class_label_id] = 1
+        
+        #annotation file and image folder to get the clips
+        ann_file =self._annot_path +im_split[5]+ '.txt'
+        Lines = open(ann_file, 'r').readlines()
+        img_folder = os.path.join(self._data_path, im_split[5])
+        max_num = len(os.listdir(img_folder)) - 1
+        
+        clip = []
+
+        d = 1 
+        path = []
+        for i in reversed(range(self.num_segments)):
+        # make it as a loop
+           i_temp = im_ind - i * d
+           while i_temp < 1:
+            i_temp = max_num + i_temp
+           while i_temp > max_num:
+            i_temp = i_temp - max_num
+           path.append(i_temp)
+           
+           #prepare the image/frame
+           path_tmp = self._data_path + '/'+im_split[5]+'/'+('{:06d}.jpg'.format(i_temp))
+           #print("image split0:{0} imagesplit1: {1} frameindex: {2}\n".format(im_split[0], im_split[1] ,'{:05d}.png'.format(i_temp)))
+           #print("maximum_frames : {}".format(max_num))
+           #print(path_tmp)
+           im = imread(path_tmp)
+           if im is None:
+               print("caught")
+           im = im[:,:,::-1].astype(np.float32, copy=False) #RGB
+           height,width,_= im.shape 
+           im_scale = float(self.cfg.TRAIN.TRIM_HEIGHT) / float(self.cfg.TRAIN.TRIM_WIDTH)
+           im = cv2.resize(im, (400,300), fx=im_scale, fy=im_scale,
+                    interpolation=cv2.INTER_LINEAR)
+           im_scale1 = float(self.cfg.TRAIN.TRIM_HEIGHT) / height
+           im_scale2 = float(self.cfg.TRAIN.TRIM_WIDTH) / width
+           im_info[count,:]=im.shape[0],im.shape[1],im_scale
+           
+           #prepare the gt boxes 
+           if len(Lines[0].split()) == 5:
+            # gt boxes and labels per image
+               x,y,w,h = [line.strip().split()[1:] for line in Lines if int((str(line).split())[0]) == im_ind][0]
+               x2 = int(x)+ int(w)
+               y2 = int(y) + int(h)
+               y,y2 = int(y)*im_scale1,y2*im_scale1
+               x,x2 = int(x)*im_scale2,x2*im_scale2
+               gt[count,0,:4] = int(x),int(y),x2,y2
+               gt[count,0,4:] = one_hot_labels
+           else : 
+               data1 =[(line.split())[1:5] for line in Lines if int((str(line).split())[0]) == im_ind][0]
+               xf,yf,wf,hf = [int(tup) for tup in data1]
+               data2 =[(line.split())[5:] for line in Lines if int((str(line).split())[0]) == im_ind][0]
+               xs,ys,ws,hs = [int(tup) for tup in data2]
+               gt[count,0,:4]= xf*im_scale2,yf*im_scale1,(wf+xf)*im_scale2,(yf+hf)*im_scale1
+               gt[count,1,:4]= xs*im_scale2,ys*im_scale1,(ws+xs)*im_scale2,(ys+hs)*im_scale1
+               num_boxes[count] *= 2
+               gt[count,:,4:] = one_hot_labels
+            #gt[count,:,:4] = gt[count,:,:4]*im_scale
+           count += 1
+           clip.append(im)
+        
+        max_shape = np.array([imz.shape for imz in clip]).max(axis=0)
+        blob = np.zeros((len(clip), max_shape[0], max_shape[1], 3),
+                    dtype=np.float32)
+        for i in range(len(clip)):
+           blob[i,0:clip[i].shape[0], 0:clip[i].shape[1], :] = clip[i]
+
+        process_data = self.transform(blob)
+        return process_data,gt,num_boxes,im_info
+        
+        
+        
 
     def get(self,index,record, indices):
         """
@@ -184,11 +273,12 @@ class ucfsports(Dataset):
     def __getitem__(self, index):
         record = self.video_list[index]
         #self.yaml_file(index)
-        segment_indices = self._sample_indices(record)
-        segment_indices = np.sort(segment_indices)
+        #segment_indices = self._sample_indices(record)
+        #segment_indices = np.sort(segment_indices)
         #print("Frames selected for index %d is:"%(index))
         #print(*segment_indices)
-        return self.get( index, record, segment_indices)
+        return self.get_all_frames(index,record)
+        #return self.get( index, record, segment_indices)
                
     def __len__(self):
         return (len(self.video_list))
