@@ -59,9 +59,13 @@ def main():
       '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '15']
   if args.dataset == "ucfsport":args.set_cfgs = ['ANCHOR_SCALES', '[4,8,16,24,28]', 'ANCHOR_RATIOS', 
       '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '2']
-  if args.dataset == "jhmdb":args.set_cfgs = ['ANCHOR_SCALES', '[4, 8, 16,24,28]', 'ANCHOR_RATIOS', 
+  if args.dataset == "urfall":args.set_cfgs = ['ANCHOR_SCALES', '[4,8,16,24,28]', 'ANCHOR_RATIOS', 
       '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '1']
-  if args.dataset == "ucf24":args.set_cfgs = ['ANCHOR_SCALES', '[4,8,16,24]', 'ANCHOR_RATIOS', 
+  if args.dataset == "imfd":args.set_cfgs = ['ANCHOR_SCALES', '[4,8,16,24,28]', 'ANCHOR_RATIOS', 
+      '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '1']
+  if args.dataset == "jhmdb":args.set_cfgs = ['ANCHOR_SCALES', '[4, 8,16,24,28]', 'ANCHOR_RATIOS', 
+      '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '1']
+  if args.dataset == "ucf24":args.set_cfgs = ['ANCHOR_SCALES', '[4,8,16,24,28]', 'ANCHOR_RATIOS', 
       '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '1']
   args.cfg_file = "cfgs/{}.yml".format(args.net)
   if args.cfg_file is not None:
@@ -93,6 +97,16 @@ def main():
       output_dir = cfg.UCFSPORT.output_model_dir + "/" + args.net + "/" + args.dataset
       if not os.path.exists(output_dir):
           os.makedirs(output_dir)
+  elif args.dataset =='urfall':
+      num_class = cfg.URFD.NUM_CLASSES
+      output_dir = cfg.URFD.output_model_dir + "/" + args.net + "/" + args.dataset
+      if not os.path.exists(output_dir):
+          os.makedirs(output_dir)
+  elif args.dataset =='imfd':
+      num_class = cfg.IMFD.NUM_CLASSES
+      output_dir = cfg.IMFD.output_model_dir + "/" + args.net + "/" + args.dataset
+      if not os.path.exists(output_dir):
+          os.makedirs(output_dir)
   elif args.dataset =='jhmdb':
       num_class = cfg.JHMDB.NUM_CLASSES
       output_dir = cfg.JHMDB.output_model_dir + "/" + args.net + "/" + args.dataset
@@ -111,7 +125,7 @@ def main():
   
   #log initialisation
   args.store_name = '_'.join(
-        ['ACT_D', args.dataset,args.net,'segment%d' % args.num_segments,'e{}'.format(args.max_epochs),'session%d'%args.session])
+        ['S-RAD', args.dataset,args.net,'segment%d' % args.num_segments,'e{}'.format(args.max_epochs),'session%d'%args.session])
   check_rootfolders(args.store_name,args.dataset)
   
   #logging
@@ -119,12 +133,12 @@ def main():
   
   #dataloader
 
-  train_loader = construct_loader(cfg,dataset = args.dataset,num_segments = args.num_segments,
+  train_loader = construct_loader(cfg,dataset = args.dataset,num_segments = args.num_segments,interval=args.interval,
         batch_size = args.batch_size,split = 'train',input_sampling = True,split_num=args.splits)
-  val_loader = construct_loader(cfg,dataset = args.dataset,num_segments = args.num_segments,
+  val_loader = construct_loader(cfg,dataset = args.dataset,num_segments = args.num_segments, interval = args.interval,
         batch_size = args.batch_size,split = 'val',input_sampling = True,split_num=args.splits)
   if args.dataset == 'virat':
-    test_loader = construct_loader(cfg,dataset = args.dataset,num_segments = args.num_segments,
+    test_loader = construct_loader(cfg,dataset = args.dataset,num_segments = args.num_segments,interval= args.interval,
         batch_size = args.batch_size,split = 'test',input_sampling = True,split_num=args.splits)
       
   #initialise meter here for AVA
@@ -154,6 +168,9 @@ def main():
    pdb.set_trace()
 
   fasterRCNN.create_architecture()
+  out =("blocks fixed:{}\n".format(cfg.RESNET.FIXED_BLOCKS))
+  log_training.write(out)
+  log_training.flush()
   print("blocks fixed:%d"%(cfg.RESNET.FIXED_BLOCKS))
   
   lr = args.lr
@@ -190,67 +207,28 @@ def main():
             if k not in model_dict:
                 replace_dict.append((k.replace('module.base_model.conv1',
                 'RCNN_base.0').replace('module.base_model.bn1','RCNN_base.1')
-                
-                #.replace('module.base_model.layer1.0.conv1.net','RCNN_base.4.0.conv1')
-                #.replace('module.base_model.layer1.0.conv2','RCNN_base.4.0.conv2.net')
                 .replace('module.base_model.layer1.0','RCNN_base.4.0')
-                
-                #.replace('module.base_model.layer1.1.conv1.net','RCNN_base.4.1.conv1')
-                #.replace('module.base_model.layer1.1.conv2','RCNN_base.4.1.conv2.net')
                 .replace('module.base_model.layer1.1','RCNN_base.4.1')
-                
-                #.replace('module.base_model.layer1.2.conv1.net','RCNN_base.4.2.conv1')
-                #.replace('module.base_model.layer1.2.conv2','RCNN_base.4.2.conv2.net')
                 .replace('module.base_model.layer1.2','RCNN_base.4.2')
-
-                
-                #.replace('module.base_model.layer2.0.conv1.net','RCNN_base.5.0.conv1')
-                #.replace('module.base_model.layer2.0.conv2','RCNN_base.5.0.conv2.net')
                 .replace('module.base_model.layer2.0','RCNN_base.5.0')
-
-                
-                #.replace('module.base_model.layer2.1.conv1.net','RCNN_base.5.1.conv1')
-                #.replace('module.base_model.layer2.1.conv2','RCNN_base.5.1.conv2.net')
                 .replace('module.base_model.layer2.1','RCNN_base.5.1')
-                   
-                #.replace('module.base_model.layer2.2.conv1.net','RCNN_base.5.2.conv1')
-                #.replace('module.base_model.layer2.2.conv2','RCNN_base.5.2.conv2.net') 
                 .replace('module.base_model.layer2.2','RCNN_base.5.2')
-
-                #.replace('module.base_model.layer2.3.conv1.net','RCNN_base.5.3.conv1')
-                #.replace('module.base_model.layer2.3.conv2','RCNN_base.5.3.conv2.net')
                 .replace('module.base_model.layer2.3','RCNN_base.5.3')
-
-                
-                #.replace('module.base_model.layer3.0.conv1.net','RCNN_base.6.0.conv1')
-                #.replace('module.base_model.layer3.0.conv2','RCNN_base.6.0.conv2.net')
                 .replace('module.base_model.layer3.0','RCNN_base.6.0')
-                
-                #.replace('module.base_model.layer3.1.conv1.net','RCNN_base.6.1.conv1')
-                #.replace('module.base_model.layer3.1.conv2','RCNN_base.6.1.conv2.net')
                 .replace('module.base_model.layer3.1','RCNN_base.6.1')
-                
-                #.replace('module.base_model.layer3.2.conv1.net','RCNN_base.6.2.conv1')
-                #.replace('module.base_model.layer3.2.conv2','RCNN_base.6.2.conv2.net')
                 .replace('module.base_model.layer3.2','RCNN_base.6.2')
-                
-                #.replace('module.base_model.layer3.3.conv1.net','RCNN_base.6.3.conv1')
-                #.replace('module.base_model.layer3.3.conv2','RCNN_base.6.3.conv2.net')
                 .replace('module.base_model.layer3.3','RCNN_base.6.3')
-                
-                #.replace('module.base_model.layer3.4.conv1.net','RCNN_base.6.4.conv1')
-                #.replace('module.base_model.layer3.4.conv2','RCNN_base.6.4.conv2.net')
                 .replace('module.base_model.layer3.4','RCNN_base.6.4')
-                
-                #.replace('module.base_model.layer3.5.conv1.net','RCNN_base.6.5.conv1')
-                #.replace('module.base_model.layer3.5.conv2','RCNN_base.6.5.conv2.net')
                 .replace('module.base_model.layer3.5','RCNN_base.6.5')
-                .replace('module.base_model.layer4.0.conv1.net.weight','RCNN_top.0.0.conv1.weight')
-                .replace('module.base_model.layer4.1.conv1.net','RCNN_top.0.1.conv1')
-                .replace('module.base_model.layer4.2.conv1.net','RCNN_top.0.2.conv1')
                 .replace('module.base_model.layer4.0.','RCNN_top.0.0.')
                 .replace('module.base_model.layer4.1','RCNN_top.0.1')
-                .replace('module.base_model.layer4.2','RCNN_top.0.2'),k))
+                .replace('module.base_model.layer4.2','RCNN_top.0.2')
+                .replace('module.base_model.layer4.0.conv1.net','RCNN_top.0.0.conv1')
+                .replace('module.base_model.layer4.1.conv1.net','RCNN_top.0.1.conv1')
+                .replace('module.base_model.layer4.2.conv1.net','RCNN_top.0.2.conv1')
+                .replace('RCNN_top.0.0.conv1.net','RCNN_top.0.0.conv1')
+                .replace('RCNN_top.0.1.conv1.net','RCNN_top.0.1.conv1')
+                .replace('RCNN_top.0.2.conv1.net','RCNN_top.0.2.conv1'),k))
                  
         for k_new, k in replace_dict:
             sd[k_new] = sd.pop(k)
@@ -304,23 +282,9 @@ def main():
     validate_voc(val_loader, fasterRCNN,args.start_epoch,num_class, \
              args.num_segments,vis,session,args.batch_size,input_data,\
              cfg,log_training,ava_val_meter,args.dataset)
+    sys.exit
     
   for epoch in range(args.start_epoch, args.max_epochs + 1):
-    
-    '''warmup_lr_multiplier, warmup_end_epoch = LR_SCHEDULE[0]
-    
-    if epoch <= warmup_end_epoch :
-      startepoch = epoch - 1
-      warmupepoch = startepoch + float(args.batch_size) / train_iters_per_epoch
-      initial_decay = warmup_lr_multiplier * warmupepoch / warmup_end_epoch
-      lr = BASE_LEARNING_RATE * initial_decay
-      for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
-    if epoch == warmup_end_epoch+1:
-      lr = BASE_LEARNING_RATE
-      for param_group in optimizer.param_groups:
-        param_group['lr'] = lr '''
-
     
     if epoch % (args.lr_decay_step + 1) == 0:
     #if meanap < best_meanap:
@@ -367,6 +331,26 @@ def main():
       validate_voc(val_loader, fasterRCNN,epoch,num_class, \
               args.num_segments,vis,session,args.batch_size,input_data,
               cfg,log_training,ava_val_meter,args.dataset)
+
+    elif args.dataset == 'urfall':
+      
+      ava_val_meter = None
+      train(train_loader, fasterRCNN,lr,optimizer,
+            epoch,num_class,args.batch_size,session,mGPUs,logger,output_dir,
+            input_data,cfg,args.acc_step,log_training)
+      validate_voc(val_loader, fasterRCNN,epoch,num_class, \
+              args.num_segments,vis,session,args.batch_size,input_data,
+              cfg,log_training,ava_val_meter,args.dataset)    
+    
+    elif args.dataset == 'imfd':
+      
+      ava_val_meter = None
+      train(train_loader, fasterRCNN,lr,optimizer,
+            epoch,num_class,args.batch_size,session,mGPUs,logger,output_dir,
+            input_data,cfg,args.acc_step,log_training)
+      validate_voc(val_loader, fasterRCNN,epoch,num_class, \
+              args.num_segments,vis,session,args.batch_size,input_data,
+              cfg,log_training,ava_val_meter,args.dataset)    
     
     elif args.dataset == 'jhmdb':
       
@@ -374,7 +358,8 @@ def main():
       train(train_loader, fasterRCNN,lr,optimizer,
             epoch,num_class,args.batch_size,session,mGPUs,logger,output_dir,
             input_data,cfg,args.acc_step,log_training)
-      validate_voc(val_loader, fasterRCNN,epoch,num_class, \
+      if epoch % 2== 0:
+        validate_voc(val_loader, fasterRCNN,epoch,num_class, \
               args.num_segments,vis,session,args.batch_size,input_data,
               cfg,log_training,ava_val_meter,args.dataset)
     
@@ -500,7 +485,8 @@ def validate_voc(val_loader,fasterRCNN,epoch,num_class,num_segments,vis,session,
     #confusion matrix
     conf_mat = ConfusionMatrix(num_classes = num_class, CONF_THRESHOLD = 0, IOU_THRESHOLD = 0.5)
  
-    num_gt = [0 for _ in range(num_class)]   
+    num_gt = [0 for _ in range(num_class)] 
+    
     #data_iter = iter(val_loader)   
     for step,data in enumerate(val_loader):
     #for step in range (10):
@@ -517,10 +503,12 @@ def validate_voc(val_loader,fasterRCNN,epoch,num_class,num_segments,vis,session,
 
         
         #evaluate /inference cpde
-        #start_time = time.time()
+
+        start_time = time.time()
         rois, cls_prob, bbox_pred = fasterRCNN(im_data, im_info, gt_boxes, num_boxes)
-        #torch.cuda.synchronize()
-        #end_time = time.time() - start_time
+        torch.cuda.synchronize()
+        end_time = time.time() - start_time
+        
 
         if dataset == 'ucfsport':
          class_dict = act2id
@@ -528,6 +516,10 @@ def validate_voc(val_loader,fasterRCNN,epoch,num_class,num_segments,vis,session,
           class_dict = jhmdbact2id
         elif dataset == 'ucf24':
           class_dict = ucf24act2id
+        elif dataset == 'urfall':
+          class_dict = fallactivity2id
+        elif dataset == 'imfd':
+          class_dict = imfallactivity2id
         scores = cls_prob.data
         boxes = rois.data[:, :, 1:5]
         #batch_size = rois.shape[0]
@@ -575,29 +567,13 @@ def validate_voc(val_loader,fasterRCNN,epoch,num_class,num_segments,vis,session,
             #take groundtruth box only if the label =1 for that class
             bbox[step][image][class_id] = [gtbox[i] for i in range(len(label)) if label[i,class_id]]
             num_gt[class_id] += np.sum(len(bbox[step][image][class_id]))
-            '''if bbox[step][image][class_id]:
-                conf_mat.process_batch(all_boxes[step][image][class_id], bbox[step][image][class_id],class_id)'''
+            if len(bbox[step][image][class_id])>0 and len(all_boxes[step][image][class_id])>0:
+                conf_mat.process_batch(all_boxes[step][image][class_id], bbox[step][image][class_id],class_id)
     
-    #plot confusion matrix
-    '''import seaborn as sn
-    import pandas as pd
-    import matplotlib.pyplot as plt
-    matrix = conf_mat.return_matrix()
-    List1 = ["BG","diving","golf","kicking","lifting","riding","run","skateboarding",
-              "swing1","swing2","walk","Falsepos"]
-    List2 = ["BG","diving","golf","kicking","lifting","riding","run","skateboarding",
-              "swing1","swing2","walk","FalseNeg"]
-    df_cm = pd.DataFrame(matrix, index = [i for i in List1],
-                  columns = [i for i in List2])
-    plt.figure(figsize = (10,7))
-    sn.set(font_scale=1.2) # for label size
-    sn.heatmap(df_cm, annot=True, annot_kws={"size": 12}) # font size
-
-    plt.show()'''
-
-    
-    #conf_mat.print_matrix()
+    conf_mat.print_matrix()
     ap = [None for _ in range(num_class)]
+    colors = ['ac','navy','gold','turquoise', 'red','green','black',
+             'brown','darkorange', 'cornflowerblue', 'teal']
     #calculate fp anf tp for each detections
     for cls_id in range(1,num_class):
       
@@ -624,7 +600,25 @@ def validate_voc(val_loader,fasterRCNN,epoch,num_class,num_segments,vis,session,
       eps = np.finfo(np.float32).eps
       recalls = tp / np.maximum(num_gt[cls_id], eps)
       precisions = tp / np.maximum((tp + fp), eps)
+      
+      #ROC curve visualisation
+      #import matplotlib.pyplot as plt
+      #plt.plot(recalls[0, :],precisions[0, :],color=colors[cls_id],
+      #         lw =2,label='class {}'.format(cls_id))
+      
       ap[cls_id] = average_precision(recalls[0, :], precisions[0, :],mode ='area')
+    
+    #visualise
+    '''fig = plt.gcf()
+    fig.subplots_adjust(bottom=0.25)
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.title('Extension of Precision-Recall curve to multi-class')
+    plt.legend(loc="best")
+    plt.show()'''
+
     for k,v in class_dict.items():
       #print("Average precision per class:")
       out =("class [{0}]:{1}   |gt:{2}".format(k,ap[v],num_gt[v]))
@@ -744,149 +738,5 @@ def validate_virat(val_loader,fasterRCNN,epoch,num_class,num_segments,vis,sessio
     log.write( mAPout + '\n')
     log.flush()       
 
-        
-@torch.no_grad()
-def validate(val_loader,fasterRCNN,epoch,num_class,num_segments,vis,session,
-             batch_size,input_data,cfg,log,ava_val_meter,dataset):
-    
-    batch_time = AverageMeter()
-    val_iters_per_epoch = int(np.round(len(val_loader)))
-    im_data,im_info,num_boxes,gt_boxes = input_data
-    fasterRCNN.eval()
-    all_boxes = [[[[]for _ in range(num_class)] for _ in range(batch_size *num_segments)]
-               for _ in range(val_iters_per_epoch)]
-    #limit the number of proposal per image across all the class
-    max_per_image = cfg.MAX_DET_IMG
-    bins = 9 
-    score_threshold = 0.1
-    tp_labels = np.zeros((num_class,bins),dtype=int)
-    fp_labels = np.zeros((num_class,bins),dtype=int)
-    fn_labels = np.zeros((num_class,bins),dtype=int)
-    all_pred_box,all_gtbb,all_gtlabels,all_scores=[],[],[],[]
-    end = time.time()
-    #data_iter = iter(val_loader)
-    
-    for step,data in enumerate(val_loader):
-    #for step in range (500):
-        #data = next(data_iter)
-        im_data.resize_(data[0].size()).copy_(data[0])
-        gt_boxes.resize_(data[1].size()).copy_(data[1])
-        num_boxes.resize_(data[2].size()).copy_(data[2])
-        im_info.resize_(data[3].size()).copy_(data[3])
-        im_data = im_data.view(-1,im_data.size(2),im_data.size(3),im_data.size(4))
-        im_info = im_info.view(-1,3)
-        gt_boxes= gt_boxes.view(-1,cfg.MAX_NUM_GT_BOXES,num_class+4)
-        num_boxes = num_boxes.view(-1)
-        if ava_val_meter:
-          meta = data[4]
-          if isinstance(meta["metadata"], (list,)):
-                for i in range(len(meta["metadata"])):
-                    meta["metadata"][i] = meta["metadata"][i].cpu().numpy()
-        start_time = time.time()
-        rois, cls_prob, bbox_pred = fasterRCNN(im_data, im_info, gt_boxes, num_boxes)
-        torch.cuda.synchronize()
-        end_time = time.time() - start_time
-
-      # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
-       #calculate the scores and boxes
-        scores = cls_prob.data
-        
-        boxes = rois.data[:, :, 1:5]
-        #batch_size = rois.shape[0]
-        box_deltas = bbox_pred.data
-        box_deltas = box_deltas.view(-1, 4) * torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_STDS).cuda() \
-                           + torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_MEANS).cuda()
-        box_deltas = box_deltas.view(scores.shape[0], -1, 4 * num_class)
-        
-       #transforms the image to x1,y1,x2,y2, format and clips the coord to images
-        pred_boxes = bbox_transform_inv(boxes, box_deltas,scores.shape[0])
-        pred_boxes = clip_boxes(pred_boxes, im_info.data,scores.shape[0])   
-
-        if ava_val_meter:
-           pred_boxes /=(im_data.size(2)-1)
-        else:
-          #convert the prediction boxes and gt_boxes to the image size
-          gtbb = gt_boxes[:,:,0:4]
-          gtlabels = gt_boxes[:,:,4:]
-          #pred_boxes /= data[3][0][1][2].item()
-          #gtbb /= data[3][0][1][2].item()
-      
-          #move the groudtruth to cpu
-          gtbb = gtbb.cpu().numpy()
-          gtlabels = gtlabels.cpu().numpy()
-        count = 0 
-       #calculate the predictions for each class in an image
-        for image in range(pred_boxes.shape[0]):
-          for class_id in range(1,num_class):
-           inds = torch.nonzero(scores[image,:,class_id]>score_threshold).view(-1)
-         # if there is det
-           if inds.numel() > 0:
-             cls_scores = scores[image,inds,class_id]
-             _, order = torch.sort(cls_scores, 0, True)
-             cls_boxes = pred_boxes[image,inds, class_id * 4:(class_id + 1) * 4]
-             cls_dets = torch.cat((cls_boxes, cls_scores.unsqueeze(1)), 1)
-             cls_dets = cls_dets[order,:]
-             keep = nms(cls_boxes[order, :], cls_scores[order],cfg.TEST.NMS)
-             cls_dets = cls_dets[keep.view(-1)]  
-             all_boxes[step][image][class_id] = cls_dets.cpu().numpy()
-
-          if max_per_image > 0:
-            image_scores = []
-            image_det = []
-            for class_id in range(1,num_class):
-             if len(all_boxes[step][image][class_id]) !=0:
-              #stack the scores to get the number of proposals in an image
-               sc = ([all_boxes[step][image][class_id][:, -1]])
-               image_scores=np.append(image_scores,sc)
-              
-            if len(image_scores) > max_per_image:
-            #take the image threshold value taking 5th or 15th entry  
-              image_thresh = np.sort(image_scores)[-max_per_image]
-              for class_id in range(1, num_class):
-                if len(all_boxes[step][image][class_id]) > 0:
-                  keep = np.where(all_boxes[step][image][class_id][:, -1] >= image_thresh)[0]
-                  all_boxes[step][image][class_id] = all_boxes[step][image][class_id][keep, :]
-                else :
-                  all_boxes[step][image][class_id] = []
-          #if all_boxes[step][image].any()  
-          det = np.asarray(all_boxes[step][image]) 
-          if det.size == 0:
-            continue
-          else:
-            all_boxes[step][image] = avg_iou(all_boxes[step][image],0.7)
-
-          if ava_val_meter:
-            if ((image % num_segments) == 0):
-              #if len(all_boxes[step][image]) > 5: #check for empty list
-              #   if not any(all_boxes[step][image]):
-              #      continue
-                
-             # else:
-                preds = all_boxes[step][image]
-                metadata = list(map(itemgetter(count),meta["metadata"]))
-                ava_val_meter.update_stats(preds,metadata)
-                count += 1
-
-          else:  
-            #calculate tp_fp_fn
-            tp_labels,fp_labels,fn_labels =compute_tp_fp(all_boxes[step][image],gtlabels[image],gtbb[image], \
-                      num_class,tp_labels,fp_labels,fn_labels,bins)
-        output = ('Test: [{0}/{1}]\t'
-                'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                .format(step,(val_iters_per_epoch), batch_time=batch_time))
-        print(output)
-     
-    if ava_val_meter:
-       ava_val_meter.finalize_metrics(log)
-       ava_val_meter.reset()
-    else : 
-       ap = precision_recall(tp_labels,fp_labels,fn_labels,num_class)
-       if dataset == 'virat':
-         dictio = activity2id
-       else:
-         dictio = class_dict
-       print_ap(tp_labels,fp_labels,fn_labels,num_class,log,step,epoch,dictio,ap)
 if __name__ == '__main__':
    main()    

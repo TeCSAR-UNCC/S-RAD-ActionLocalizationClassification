@@ -10,7 +10,9 @@ from dataset_config.UCF_Sports.ucfsports import *
 from dataset_config.JHMDB.JHMDB import *
 from dataset_config.UCF101.UCF101 import *
 from dataset_config.ava.ava_dataset import *
+from dataset_config.imvia_fd.imvia_fd import *
 from dataset_config.ava.meters import *
+from dataset_config.UR_falldataset.urfalldataset import *
 
 
 def detection_collate(batch):
@@ -37,7 +39,8 @@ def detection_collate(batch):
     return blob, gt, num_boxes, im_info
 
 def construct_loader(cfg,dataset = None,num_segments = 8,batch_size = 3,
-                     split = None,input_sampling = True, split_num = None):
+                     split = None,input_sampling = True, split_num = None,
+                     interval = 3):
     
     if dataset == 'virat':
         num_class = cfg.VIRAT.NUM_CLASS
@@ -99,13 +102,56 @@ def construct_loader(cfg,dataset = None,num_segments = 8,batch_size = 3,
             drop_last = False
         
         data_loader = torch.utils.data.DataLoader(ucfsports(cfg,image_set,
-            PHASE = split,num_segments=num_segments,dense_sample = cfg.DENSE_SAMPLE,
+            PHASE = split,num_segments=num_segments,interval = interval,dense_sample = cfg.DENSE_SAMPLE,
             uniform_sample=cfg.UNIFORM_SAMPLE,random_sample = cfg.RANDOM_SAMPLE,
             strided_sample = cfg.STRIDED_SAMPLE,is_input_sampling = input_sampling,
             transform=torchvision.transforms.Compose([ToTorchFormatTensor(div=1),normalize])),
             batch_size=batch_size,shuffle = shuffle,num_workers=cfg.NUM_WORKERS,pin_memory=True,
             drop_last = drop_last,collate_fn=detection_collate)  #change shuffle to true after debuging
         return data_loader
+    
+    elif dataset == 'urfall':
+
+        num_class = cfg.URFD.NUM_CLASSES
+        #image_set = 'UCF-Sports_RGB_1_split_0'
+        normalize = GroupNormalize(cfg.URFD.INPUT_MEAN, cfg.URFD.INPUT_STD)
+        if split == 'train':
+            shuffle = True      #modify to true after debug
+            drop_last = True
+        if split == 'val':
+            shuffle = False
+            drop_last = False
+        
+        data_loader = torch.utils.data.DataLoader(urfalldataset(cfg,
+            PHASE = split,num_segments=num_segments,interval = interval,dense_sample = cfg.DENSE_SAMPLE,
+            uniform_sample=cfg.UNIFORM_SAMPLE,random_sample = cfg.RANDOM_SAMPLE,
+            strided_sample = cfg.STRIDED_SAMPLE,
+            transform=torchvision.transforms.Compose([ToTorchFormatTensor(div=1),normalize])),
+            batch_size=batch_size,shuffle = shuffle,num_workers=cfg.NUM_WORKERS,pin_memory=True,
+            drop_last = drop_last,collate_fn=detection_collate)  #change shuffle to true after debuging
+        return data_loader
+    
+    elif dataset == 'imfd':
+
+        num_class = cfg.IMFD.NUM_CLASSES
+        #image_set = 'UCF-Sports_RGB_1_split_0'
+        normalize = GroupNormalize(cfg.IMFD.INPUT_MEAN, cfg.IMFD.INPUT_STD)
+        if split == 'train':
+            shuffle = True      #modify to true after debug
+            drop_last = True
+        if split == 'val':
+            shuffle = False
+            drop_last = False
+        
+        data_loader = torch.utils.data.DataLoader(imvia_fd(cfg,
+            PHASE = split,num_segments=num_segments,interval = interval,dense_sample = cfg.DENSE_SAMPLE,
+            uniform_sample=cfg.UNIFORM_SAMPLE,random_sample = cfg.RANDOM_SAMPLE,
+            strided_sample = cfg.STRIDED_SAMPLE,
+            transform=torchvision.transforms.Compose([ToTorchFormatTensor(div=1),normalize])),
+            batch_size=batch_size,shuffle = shuffle,num_workers=cfg.NUM_WORKERS,pin_memory=True,
+            drop_last = drop_last,collate_fn=detection_collate)  #change shuffle to true after debuging
+        return data_loader
+
 
     elif dataset == 'jhmdb':
 
@@ -134,7 +180,7 @@ def construct_loader(cfg,dataset = None,num_segments = 8,batch_size = 3,
         #image_set = split_num
         normalize = GroupNormalize(cfg.UCF24.INPUT_MEAN, cfg.UCF24.INPUT_STD)
         if split == 'train':
-            shuffle = False      #modify to true after debug
+            shuffle = True      #modify to true after debug
             drop_last = True
         if split == 'val':
             shuffle = False
