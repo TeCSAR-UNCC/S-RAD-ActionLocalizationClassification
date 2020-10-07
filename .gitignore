@@ -1,2 +1,6 @@
 .vscode
+<<<<<<< HEAD
+*.pycS-RAD/pretrained_model/
+=======
 *.pyc
+>>>>>>> 4a258de8c7a9ee3528d835de091cd8bf3a92f0f1

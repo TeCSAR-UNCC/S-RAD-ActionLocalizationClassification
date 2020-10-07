@@ -1,0 +1,5 @@
+*.c
+*.cpp
+*.so
+__pycache__
+*.pyx
