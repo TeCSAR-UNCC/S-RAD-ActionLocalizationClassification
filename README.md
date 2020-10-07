@@ -8,7 +8,8 @@ Single  Run  Action  Detector  (S-RAD)is a real-time, privacy-preserving  action
 
 # Overview
 
-We release the Pytorch Code of S-RAD
+We release the Pytorch Code of S-RAD:
+
 ![Screenshot](single_scale_base_implementation.png)
 
 # Table of Contents:
