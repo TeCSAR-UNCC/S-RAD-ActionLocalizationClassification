@@ -108,7 +108,7 @@ python3 trainval_net.py --dataset ucfsport
                         --shift_place blockres 
                         --tune_from kinetics_resnet50.pth --pathway naive
 ```
-where 'bs' is the batch size with default 1,'s' is the session number to differentiate the training session,'epochs' is the value the maximum epoch,loss type is sigmoid by default, acc_step is the accumulation step (gradient accumulation is implemented), 'tune_from' is the checkpoint of kinetics 400 to perform transfer learning, shift_div channels/feature maps proportion, num_segments is the num of frames, pathway is naive by default **V100 GPU accomodated batch size of 3 (24 frames) at lr_rate 0.01 , lr_decay_step of 60** To obtain the result as reported in the paper freeze the first block of Resnet in RESNET.FIXED_BLOCKS_1 of config file at S-RAD/lib/model/utils/config.py
+where 'bs' is the batch size with default 1,'s' is the session number to differentiate the training session,'epochs' is the value the maximum epoch,loss type is sigmoid by default, acc_step is the accumulation step (gradient accumulation is implemented), 'tune_from' is the [checkpoint](https://drive.google.com/file/d/1ZytjmOh3QAwEWKp67h_Pi43PiWjZ4iUL/view?usp=sharing) of kinetics 400 to perform transfer learning, shift_div channels/feature maps proportion, num_segments is the num of frames, pathway is naive by default **V100 GPU accomodated batch size of 3 (24 frames) at lr_rate 0.01 , lr_decay_step of 60** To obtain the result as reported in the paper freeze the first block of Resnet in RESNET.FIXED_BLOCKS_1 of config file at S-RAD/lib/model/utils/config.py
 
 ### UR_Fall Dataset:
 
